@@ -441,6 +441,50 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     if (eligible.length < before) log("dev_blocklist", `Filtered ${before - eligible.length} pool(s) via OKX creator check`);
   }
 
+  // ── VWAP Trend Screening ────────────────────────────────────────
+  // Dedicated VWAP slope check: 5m must show rising VWAP (aligns with 5m screening interval).
+  // Available intervals: 30_MINUTE, 15_MINUTE, and 5_MINUTE.
+  // Falling VWAP = slow death = hard skip. Insufficient data = skip (don't pass).
+  if (eligible.length > 0) {
+    const vwapCheck = await Promise.all(
+      eligible.map(async (pool) => {
+        try {
+          const conf5m = await confirmIndicatorPreset({
+            mint: pool.base?.mint,
+            side: "entry",
+            preset: "vwap_confirm",
+            intervals: ["5_MINUTE"],
+          });
+          const confirmed5m = conf5m?.confirmed === true;
+          const reason5m = conf5m?.reason || "no data";
+          if (confirmed5m) {
+            return { pool: pool.pool, confirmed: true, reason: `VWAP rising: 5m ✓`, poolName: pool.name };
+          } else {
+            return { pool: pool.pool, confirmed: false, reason: `VWAP reject: 5m: ${reason5m}`, poolName: pool.name };
+          }
+        } catch (error) {
+          return { pool: pool.pool, confirmed: false, reason: `VWAP check error: ${error.message}`, poolName: pool.name };
+        }
+      }),
+    );
+    const vwapByPool = new Map(vwapCheck.map((r) => [r.pool, r]));
+    const before = eligible.length;
+    const vwapPassed = eligible.filter((pool) => {
+      const result = vwapByPool.get(pool.pool);
+      if (!result || result.confirmed) return true;
+      pushFilteredReason(filteredOut, pool, result.reason);
+      log("screening", `VWAP filter rejected ${pool.name} (${pool.pool.slice(0, 8)}): ${result.reason}`);
+      return false;
+    });
+    eligible.splice(0, eligible.length, ...vwapPassed);
+    if (eligible.length < before) {
+      log("screening", `VWAP trend filter removed ${before - eligible.length} candidate(s)`);
+    }
+  }
+
+  // ── RSI / Indicator Confirmation Screening ─────────────────────
+  // Secondary filter: checks entry preset (RSI reversal, Supertrend, etc.)
+  // Runs AFTER VWAP so expensive indicator API calls are only made on VWAP-passing pools.
   if (config.indicators.enabled && eligible.length > 0) {
     const confirmations = await Promise.all(
       eligible.map(async (pool) => {
