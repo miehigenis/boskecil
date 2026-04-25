@@ -883,6 +883,15 @@ export async function deployPosition({
       }
     } else {
       // ── Standard Path (≤69 bins) ─────────────────────────────────
+      // Preflight: verify wallet balance can cover tx + fees + reserve
+      const preflightBalStd = await getConnection().getBalance(wallet.publicKey);
+      const gasReserveLamportsStd = Math.floor(config.management.gasReserve * 1e9);
+      const estimatedFeeLamportsStd = 5000;
+      const preflightAvailableStd = preflightBalStd - gasReserveLamportsStd - estimatedFeeLamportsStd;
+      if (preflightAvailableStd <= 0) {
+        throw new Error(`Insufficient balance for deploy. Have ${(preflightBalStd / 1e9).toFixed(3)} SOL, need at least ${((gasReserveLamportsStd + estimatedFeeLamportsStd) / 1e9).toFixed(3)} SOL after reserve.`);
+      }
+
       const tx = await pool.initializePositionAndAddLiquidityByStrategy({
         positionPubKey: newPosition.publicKey,
         user: wallet.publicKey,
