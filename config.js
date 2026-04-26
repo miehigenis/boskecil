@@ -183,7 +183,7 @@ export const config = {
   strategy: {
     strategy:     u.strategy     ?? "bid_ask",
     minBinsBelow: u.minBinsBelow ?? 35,
-    maxBinsBelow: u.maxBinsBelow ?? 69,
+    maxBinsBelow: u.maxBinsBelow ?? 210,
   },
 
   // ─── Scheduling ─────────────────────────
