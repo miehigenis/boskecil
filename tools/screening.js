@@ -442,8 +442,9 @@ export async function getTopCandidates({ limit = 10 } = {}) {
   }
 
   // ── VWAP Trend Screening (hard rule) ─────────────────────────────
-  // Rule: VWAP must be rising (>0.5% slope) AND within -20% of VWAP ATH.
-  // Falling VWAP = slow death = hard reject. Insufficient data = skip.
+  // Rule: price must be within -20% of VWAP ATH (hasn't pumped too far).
+  // Slope requirement REMOVED — slope is volatile on 5m and causes false rejects.
+  // Insufficient data = skip (pass). onchainos error = skip (pass).
   // Based on 5m candles from onchainos, computed locally.
   const ATH_DROP_LIMIT = -20; // % below VWAP ATH → hard reject
   if (eligible.length > 0) {
@@ -454,22 +455,17 @@ export async function getTopCandidates({ limit = 10 } = {}) {
           if (vwap.insufficient_data) {
             return { pool: pool.pool, confirmed: true, reason: "VWAP: insufficient data, passing", poolName: pool.name };
           }
-          // rising === true means slope > 0.5%
           // distanceFromAthPct > -20 means within 20% of ATH
-          const risingOk = vwap.rising === true;
-          const athOk    = vwap.distanceFromAthPct !== null && vwap.distanceFromAthPct > ATH_DROP_LIMIT;
-          if (risingOk && athOk) {
+          const athOk = vwap.distanceFromAthPct !== null && vwap.distanceFromAthPct > ATH_DROP_LIMIT;
+          if (athOk) {
             return {
               pool: pool.pool,
               confirmed: true,
-              reason: `VWAP rising (${vwap.slopePct}%), ${vwap.distanceFromAthPct?.toFixed(1)}% from ATH ✓`,
+              reason: `VWAP ${vwap.distanceFromAthPct?.toFixed(1)}% from ATH ✓`,
               poolName: pool.name,
             };
           } else {
-            const reason = !risingOk
-              ? `VWAP reject: falling (${vwap.slopePct ?? "n/a"}%)`
-              : `VWAP reject: ${vwap.distanceFromAthPct?.toFixed(1)}% below ATH (limit -20%)`;
-            return { pool: pool.pool, confirmed: false, reason, poolName: pool.name };
+            return { pool: pool.pool, confirmed: false, reason: `VWAP reject: ${vwap.distanceFromAthPct?.toFixed(1)}% below ATH (limit -20%)`, poolName: pool.name };
           }
         } catch (error) {
           return { pool: pool.pool, confirmed: true, reason: `VWAP check error: ${error.message}`, poolName: pool.name };
