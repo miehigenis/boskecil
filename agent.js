@@ -330,7 +330,14 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
         }
 
         await onToolStart?.({ name: functionName, args: functionArgs, step });
-        const result = await executeTool(functionName, functionArgs);
+        let result;
+        let didHardBlock = false;
+        try {
+          result = await executeTool(functionName, functionArgs);
+        } catch (err) {
+          // Wrap thrown errors so the model can see them
+          result = { error: err.message || String(err), success: false };
+        }
         await onToolFinish?.({
           name: functionName,
           args: functionArgs,
@@ -339,9 +346,20 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
           step,
         });
 
-        // Lock deploy_position after first attempt regardless of outcome — retrying is never right
+        // deploy_position retries: only hard-block on actual deploy failures (RPC error, tx rejected, etc.)
+        // Soft-blocks (Meteora uninitialized bin arrays, bitmap extension, non-refundable rent cost)
+        // are Meteora infrastructure issues — do NOT count as a real attempt, give 2 chances
+        if (functionName === "deploy_position" && NO_RETRY_TOOLS.has(functionName)) {
+          const msg = (result?.error || result?.reason || "").toLowerCase();
+          const isBinArrayBlock = msg.includes("bin-array") || msg.includes("bin array")
+            || msg.includes("bitmap extension") || msg.includes("non-refundable");
+          if (!isBinArrayBlock) {
+            firedOnce.add(functionName); // real failure — lock
+          } else {
+            didHardBlock = true;
+          }
+        }
         // For close/swap: only lock on success so genuine failures can be retried
-        if (NO_RETRY_TOOLS.has(functionName)) firedOnce.add(functionName);
         else if (ONCE_PER_SESSION.has(functionName) && result.success === true) firedOnce.add(functionName);
 
         return {
