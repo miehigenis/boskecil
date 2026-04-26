@@ -914,9 +914,11 @@ function buildGmgnFunnelReport(stageCounts, allFiltered = [], { fromStage = 1 } 
   return details ? `${funnel}\n\n${details}` : funnel;
 }
 
-function computeBinsBelow(volatility) {
+function computeBinsBelow(volatility, binStep = null) {
   const lo = config.strategy.minBinsBelow;
-  const hi = config.strategy.maxBinsBelow;
+  let hi = config.strategy.maxBinsBelow; // fallback
+  if (binStep === 80) hi = 173;
+  else if (binStep === 100) hi = 140;
   return Math.max(lo, Math.min(hi, Math.round(lo + ((Number(volatility) || 0) / 5) * (hi - lo))));
 }
 
@@ -1403,7 +1405,7 @@ async function deployLatestCandidate(index) {
     throw new Error("Invalid candidate index. Run /screen first.");
   }
   const deployAmount = computeDeployAmount((await getWalletBalances()).sol);
-  const binsBelow = computeBinsBelow(candidate.volatility);
+  const binsBelow = computeBinsBelow(candidate.volatility, candidate.bin_step);
   const result = await executeTool("deploy_position", {
     pool_address: candidate.pool,
     amount_y: deployAmount,
