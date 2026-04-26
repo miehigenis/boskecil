@@ -3,6 +3,7 @@ import { setDefaultResultOrder } from "dns";
 import { config } from "../config.js";
 import { log } from "../logger.js";
 import { fetchChartIndicatorsForMint } from "./chart-indicators.js";
+import { getAdvancedInfo } from "./okx.js";
 
 // Force IPv4 — GMGN OpenAPI does not support IPv6
 setDefaultResultOrder("ipv4first");
@@ -547,9 +548,32 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
   stageCounts.s1 = s1.length;
   log("gmgn", `Stage1 rank: ${ranked.length} → ${s1.length} pass`);
 
+  // ── Stage 1.5: OKX suspicious_pct filter ──────────────────────────────────
+  // Hard gate: reject if OKX suspicious_pct > maxOkxSuspiciousPct (default 25%)
+  // Falls between S1 (GMGN rank/volume filter) and S2 (GMGN token info)
+  const maxOkxSuspicious = g.maxOkxSuspiciousPct ?? 0.25;
+  const s1b = [];
+  for (const token of s1) {
+    const mint = token.address;
+    try {
+      const okx = await getAdvancedInfo(mint);
+      if (okx && maxOkxSuspicious > 0 && okx.suspicious_pct != null && okx.suspicious_pct > maxOkxSuspicious) {
+        filtered.push({ stage: "1.5", name: token.symbol || mint, reason: `OKX suspicious ${(okx.suspicious_pct * 100).toFixed(1)}% > ${(maxOkxSuspicious * 100).toFixed(0)}%` });
+        continue;
+      }
+      s1b.push({ token, okx });
+    } catch (error) {
+      // OKX unavailable — pass through gracefully
+      log("gmgn", `Stage1.5 OKX unavailable for ${token.symbol || mint}: ${error.message} — skip filter`);
+      s1b.push({ token, okx: null });
+    }
+  }
+  stageCounts.s1b = s1b.length;
+  log("gmgn", `Stage1.5 OKX: ${s1.length} → ${s1b.length} pass`);
+
   // ── Stage 2: token info filter ────────────────────────────────────────────
   const s2 = [];
-  for (const token of s1) {
+  for (const { token, okx } of s1b) {
     const mint = token.address;
     try {
       const infoPayload = await gmgnFetch("/v1/token/info", { params: { chain: "sol", address: mint } });
@@ -559,7 +583,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
         filtered.push({ stage: 2, name: token.symbol || mint, reason: infoCheck.reasons.join(", ") });
         continue;
       }
-      s2.push({ token, info, infoCheck });
+      s2.push({ token, info, infoCheck, okx });
     } catch (error) {
       log("gmgn", `Stage2 skip ${token.symbol || mint}: ${error.message}`);
       filtered.push({ stage: 2, name: token.symbol || mint, reason: error.message });
@@ -571,7 +595,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
   // ── Stage 3: holders/traders enrichment (no hard filter) + Meteora pool ──
   const s3 = [];
   const minTvl = num(g.minTvl ?? config.screening.minTvl ?? 0);
-  for (const { token, info, infoCheck } of s2) {
+  for (const { token, info, infoCheck, okx } of s2) {
     const mint = token.address;
     try {
       const [holdersPayload, tradersPayload] = await Promise.all([
@@ -591,7 +615,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
         filtered.push({ stage: 3, name: token.symbol || mint, reason: `no SOL DLMM pool above tvl>${minTvl}` });
         continue;
       }
-      s3.push({ token, info, infoCheck, holdersCheck, topPools });
+      s3.push({ token, info, infoCheck, holdersCheck, topPools, okx });
     } catch (error) {
       log("gmgn", `Stage3 skip ${token.symbol || mint}: ${error.message}`);
       filtered.push({ stage: 3, name: token.symbol || mint, reason: error.message });

@@ -129,6 +129,7 @@ export const config = {
     maxSniperCount: gmgnValue("maxSniperCount", "gmgnMaxSniperCount", 20),
     maxSniperHoldRate: gmgnValue("maxSniperHoldRate", "gmgnMaxSniperHoldRate", 0.3),
     minTotalFeeSol: gmgnValue("minTotalFeeSol", "gmgnMinTotalFeeSol", 30),
+    maxOkxSuspiciousPct: gmgnValue("maxOkxSuspiciousPct", "gmgnMaxOkxSuspiciousPct", 0.25),
     athFilterPct: gmgnValue("athFilterPct", "gmgnAthFilterPct", null),
     preferredKolNames: gmgnArray("preferredKolNames", "gmgnPreferredKolNames", []),
     dumpKolNames: gmgnArray("dumpKolNames", "gmgnDumpKolNames", []),
