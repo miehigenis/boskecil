@@ -4,6 +4,7 @@ import readline from "readline";
 import { agentLoop } from "./agent.js";
 import { log } from "./logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
+import { getVwapIndicators } from "./tools/chart-indicators.js";
 import { getWalletBalances } from "./tools/wallet.js";
 import { getTopCandidates } from "./tools/screening.js";
 import { formatGmgnCandidateForPrompt } from "./tools/gmgn.js";
@@ -305,14 +306,33 @@ export async function runManagementCycle({ silent = false } = {}) {
     if (actionPositions.length > 0) {
       log("cron", `Management: ${actionPositions.length} action(s) needed — invoking LLM [model: ${config.llm.managementModel}]`);
 
+      // ── Fetch VWAP indicators for each action position (parallel) ──
+      const vwapResults = await Promise.allSettled(
+        actionPositions.map(async (p) => {
+          const indicators = await getVwapIndicators(p.base_mint).catch(() => null);
+          return { position: p.position, indicators };
+        })
+      );
+      const vwapMap = new Map();
+      for (const r of vwapResults) {
+        if (r.status === "fulfilled" && r.value?.indicators) {
+          vwapMap.set(r.value.position, r.value.indicators);
+        }
+      }
+
       const actionBlocks = actionPositions.map((p) => {
         const act = actionMap.get(p.position);
+        const vw = vwapMap.get(p.position);
+        const vwapLine = vw
+          ? `  vwap: current=${vw.currentPrice.toFixed(vw.currentPrice < 1 ? 6 : 2)} | ATH=${vw.athPrice.toFixed(vw.athPrice < 1 ? 6 : 2)} | ATH_dist=${vw.athDistancePct.toFixed(1)}% | slope_20=${vw.slope?.toFixed(3) ?? "?"}%/bar`
+          : `  vwap: unavailable`;
         return [
           `POSITION: ${p.pair} (${p.position})`,
           `  pool: ${p.pool}`,
           `  action: ${act.action}${act.rule && act.rule !== "exit" ? ` — Rule ${act.rule}: ${act.reason}` : ""}${act.rule === "exit" ? ` — ⚡ Trailing TP: ${act.reason}` : ""}`,
           `  pnl_pct: ${p.pnl_pct}% | unclaimed_fees: ${cur}${p.unclaimed_fees_usd} | value: ${cur}${p.total_value_usd} | fee_per_tvl_24h: ${p.fee_per_tvl_24h ?? "?"}%`,
           `  bins: lower=${p.lower_bin} upper=${p.upper_bin} active=${p.active_bin} | oor_minutes: ${p.minutes_out_of_range ?? 0}`,
+          vwapLine,
           p.instruction ? `  instruction: "${p.instruction}"` : null,
         ].filter(Boolean).join("\n");
       }).join("\n\n");
