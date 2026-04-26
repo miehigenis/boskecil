@@ -201,7 +201,7 @@ export async function runManagementCycle({ silent = false } = {}) {
 
   try {
     if (!silent && telegramEnabled()) {
-      liveMessage = await createLiveMessage("🔄 Management Cycle", "Evaluating positions...");
+      liveMessage = await createLiveMessage("<b>🔄 Management Cycle</b>", "Evaluating positions...");
     }
     const livePositions = await getMyPositions({ force: true }).catch(() => null);
     positions = livePositions?.positions || [];
@@ -435,7 +435,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
     return screenReport;
   }
   if (!silent && telegramEnabled()) {
-    liveMessage = await createLiveMessage("🔍 Screening Cycle", "Scanning candidates...");
+    liveMessage = await createLiveMessage("<b>🔍 Screening Cycle</b>", "Scanning candidates...");
   }
   timers.screeningLastRun = Date.now();
   log("cron", `Starting screening cycle [model: ${config.llm.screeningModel}]`);
