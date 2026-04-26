@@ -638,9 +638,9 @@ STEPS:
    bins_below = round(${config.strategy.minBinsBelow} + (volatility/5)*${config.strategy.maxBinsBelow - config.strategy.minBinsBelow}) clamped to [${config.strategy.minBinsBelow},${config.strategy.maxBinsBelow}].
    bins_above = 0. Single-side SOL only: set amount_y, keep amount_x = 0.
 3. Report in this exact format (no tables, no extra sections):
-   🚀 DEPLOYED
+   🚀 <b>DEPLOYED</b>
 
-   <pool name>
+   <b><pool name></b>
    <pool address>
 
    ◎ <deploy amount> SOL | <strategy> | bin <active_bin>
@@ -654,7 +654,7 @@ STEPS:
      range_coverage.upside_pct
      range_coverage.width_pct
 
-   MARKET
+   <b>MARKET</b>
    Fee/TVL: <x>%
    Volume: $<x>
    TVL: $<x>
@@ -663,18 +663,18 @@ STEPS:
    Mcap: $<x>
    Age: <x>h
 
-   AUDIT
+   <b>AUDIT</b>
    Top10: <x>%
    Bots: <x>%
    Fees paid: <x> SOL
    Smart wallets: <names or none>
 
-   RISK
+   <b>RISK</b>
    <If OKX advanced/risk data exists, list only the fields that actually exist: Risk level, Bundle, Sniper, Suspicious, ATH distance, Rugpull, Wash.>
    <If only rugpull/wash exist, list just those.>
    <If OKX enrichment is missing, write exactly: OKX: unavailable>
 
-   WHY THIS WON
+   <b>WHY THIS WON</b>
    <2-4 concise sentences on why this pool won, key risks, and why it still beat the alternatives>
 4. If no pool qualifies, report in this exact format instead:
    ⛔ NO DEPLOY
