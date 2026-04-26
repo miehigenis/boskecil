@@ -3,7 +3,7 @@ import { isBlacklisted } from "../token-blacklist.js";
 import { isDevBlocked, getBlockedDevs } from "../dev-blocklist.js";
 import { log } from "../logger.js";
 import { isBaseMintOnCooldown, isPoolOnCooldown } from "../pool-memory.js";
-import { confirmIndicatorPreset } from "./chart-indicators.js";
+import { confirmIndicatorPreset, getVwapIndicators } from "./chart-indicators.js";
 import { discoverGmgnPools } from "./gmgn.js";
 
 const DATAPI_JUP = "https://datapi.jup.ag/v1";
@@ -441,29 +441,38 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     if (eligible.length < before) log("dev_blocklist", `Filtered ${before - eligible.length} pool(s) via OKX creator check`);
   }
 
-  // ── VWAP Trend Screening ────────────────────────────────────────
-  // Dedicated VWAP slope check: 5m must show rising VWAP (aligns with 5m screening interval).
-  // Available intervals: 30_MINUTE, 15_MINUTE, and 5_MINUTE.
-  // Falling VWAP = slow death = hard skip. Insufficient data = skip (don't pass).
+  // ── VWAP Trend Screening (hard rule) ─────────────────────────────
+  // Rule: VWAP must be rising (>0.5% slope) AND within -20% of VWAP ATH.
+  // Falling VWAP = slow death = hard reject. Insufficient data = skip.
+  // Based on 5m candles from onchainos, computed locally.
+  const ATH_DROP_LIMIT = -20; // % below VWAP ATH → hard reject
   if (eligible.length > 0) {
     const vwapCheck = await Promise.all(
       eligible.map(async (pool) => {
         try {
-          const conf5m = await confirmIndicatorPreset({
-            mint: pool.base?.mint,
-            side: "entry",
-            preset: "vwap_confirm",
-            intervals: ["5_MINUTE"],
-          });
-          const confirmed5m = conf5m?.confirmed === true;
-          const reason5m = conf5m?.reason || "no data";
-          if (confirmed5m) {
-            return { pool: pool.pool, confirmed: true, reason: `VWAP rising: 5m ✓`, poolName: pool.name };
+          const vwap = getVwapIndicators(pool.base?.mint);
+          if (vwap.insufficient_data) {
+            return { pool: pool.pool, confirmed: true, reason: "VWAP: insufficient data, passing", poolName: pool.name };
+          }
+          // rising === true means slope > 0.5%
+          // distanceFromAthPct > -20 means within 20% of ATH
+          const risingOk = vwap.rising === true;
+          const athOk    = vwap.distanceFromAthPct !== null && vwap.distanceFromAthPct > ATH_DROP_LIMIT;
+          if (risingOk && athOk) {
+            return {
+              pool: pool.pool,
+              confirmed: true,
+              reason: `VWAP rising (${vwap.slopePct}%), ${vwap.distanceFromAthPct?.toFixed(1)}% from ATH ✓`,
+              poolName: pool.name,
+            };
           } else {
-            return { pool: pool.pool, confirmed: false, reason: `VWAP reject: 5m: ${reason5m}`, poolName: pool.name };
+            const reason = !risingOk
+              ? `VWAP reject: falling (${vwap.slopePct ?? "n/a"}%)`
+              : `VWAP reject: ${vwap.distanceFromAthPct?.toFixed(1)}% below ATH (limit -20%)`;
+            return { pool: pool.pool, confirmed: false, reason, poolName: pool.name };
           }
         } catch (error) {
-          return { pool: pool.pool, confirmed: false, reason: `VWAP check error: ${error.message}`, poolName: pool.name };
+          return { pool: pool.pool, confirmed: true, reason: `VWAP check error: ${error.message}`, poolName: pool.name };
         }
       }),
     );

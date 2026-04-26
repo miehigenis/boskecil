@@ -1,8 +1,114 @@
 import { config } from "../config.js";
 import { log } from "../logger.js";
+import { spawnSync } from "child_process";
 
 const DEFAULT_INTERVALS = ["5_MINUTE"];
 const DEFAULT_CANDLES = 298;
+const CLI = "/home/ubuntu/.local/bin/onchainos";
+
+function safeNum(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+// ── OHLCV candle fetcher via onchainos CLI ──────────────────────
+export function fetchCandles(mint, bar = "5m", limit = 299) {
+  try {
+    const raw = spawnSync(CLI, [
+      "market", "kline",
+      "--chain", "solana",
+      "--address", mint,
+      "--bar", bar,
+      "--limit", String(limit),
+    ], { encoding: "utf8", timeout: 15000 });
+    if (!raw.stdout) return [];
+    let data;
+    try { data = JSON.parse(raw.stdout); } catch { return []; }
+    const candles = Array.isArray(data.data) ? data.data
+               : Array.isArray(data) ? data : [];
+    return candles.map((c) => ({
+      high:   parseFloat(c.high   || c.h || 0),
+      low:    parseFloat(c.low    || c.l || 0),
+      close:  parseFloat(c.close  || c.c || 0),
+      volume: parseFloat(c.volume || c.v || 0),
+    })).filter((c) => c.close > 0);
+  } catch { return []; }
+}
+
+// ── VWAP Calculations ────────────────────────────────────────────
+function calcVWAP(candles) {
+  if (!Array.isArray(candles) || candles.length === 0) return null;
+  let cumulativeTPV = 0;
+  let cumulativeVol = 0;
+  for (const c of candles) {
+    const typicalPrice = (Number(c.high) + Number(c.low) + Number(c.close)) / 3;
+    const volume = Number(c.volume) || 0;
+    cumulativeTPV += typicalPrice * volume;
+    cumulativeVol += volume;
+  }
+  return cumulativeVol > 0 ? cumulativeTPV / cumulativeVol : null;
+}
+
+function findVwapATH(candles, lookback = 100) {
+  if (!Array.isArray(candles) || candles.length < 10) return null;
+  const recent = candles.slice(-lookback);
+  let maxVwap = -Infinity;
+  let cumulativeTPV = 0;
+  let cumulativeVol = 0;
+  for (const c of recent) {
+    const typicalPrice = (Number(c.high) + Number(c.low) + Number(c.close)) / 3;
+    const volume = Number(c.volume) || 0;
+    cumulativeTPV += typicalPrice * volume;
+    cumulativeVol += volume;
+    const vwap = cumulativeVol > 0 ? cumulativeTPV / cumulativeVol : null;
+    if (vwap != null && vwap > maxVwap) maxVwap = vwap;
+  }
+  return maxVwap > 0 ? maxVwap : null;
+}
+
+export function calculateVWAPSlope(candles, period = 20) {
+  if (!Array.isArray(candles) || candles.length < period * 2) {
+    return { slope: 0, rising: null, vwap_current: null, vwap_prior: null, insufficient_data: true, vwapAth: null, distanceFromAthPct: null };
+  }
+  const recent = candles.slice(-period);
+  const prior  = candles.slice(-period * 2, -period);
+  const vwapCurrent = calcVWAP(recent);
+  const vwapPrior   = calcVWAP(prior);
+  if (vwapCurrent == null || vwapPrior == null || vwapPrior === 0) {
+    return { slope: 0, rising: null, vwap_current: vwapCurrent, vwap_prior: vwapPrior, insufficient_data: true, vwapAth: null, distanceFromAthPct: null };
+  }
+  const slope  = (vwapCurrent - vwapPrior) / vwapPrior;
+  const rising = slope > 0.005; // require >0.5% to call it rising
+  const vwapAth = findVwapATH(candles, 100);
+  let distanceFromAthPct = null;
+  if (vwapAth != null && vwapAth > 0 && vwapCurrent > 0) {
+    distanceFromAthPct = Math.round(((vwapCurrent - vwapAth) / vwapAth) * 10000) / 100;
+  }
+  return {
+    slope:            Math.round(slope * 10000) / 10000,
+    rising,
+    vwap_current:     vwapCurrent,
+    vwap_prior:       vwapPrior,
+    insufficient_data: false,
+    vwapAth,
+    distanceFromAthPct,
+  };
+}
+
+export function getVwapIndicators(mint) {
+  const candles = fetchCandles(mint, "5m", 299);
+  if (candles.length < 40) {
+    return { rising: null, slopePct: null, vwapAth: null, distanceFromAthPct: null, insufficient_data: true };
+  }
+  const result = calculateVWAPSlope(candles, 20);
+  return {
+    rising:             result.rising,
+    slopePct:           result.slope != null ? (result.slope * 100).toFixed(2) : null,
+    vwapAth:            result.vwapAth ?? null,
+    distanceFromAthPct: result.distanceFromAthPct,
+    insufficient_data:   result.insufficient_data,
+  };
+}
 
 function getApiBase() {
   return String(config.api.url || "https://api.agentmeridian.xyz/api").replace(/\/+$/, "");
@@ -19,11 +125,6 @@ function normalizeIntervals(intervals) {
   return list
     .map((value) => String(value || "").trim().toUpperCase())
     .filter((value) => value === "5_MINUTE" || value === "15_MINUTE");
-}
-
-function safeNum(value) {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
 }
 
 function buildSignalSummary(payload) {
