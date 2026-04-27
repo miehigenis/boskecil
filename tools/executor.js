@@ -598,6 +598,15 @@ async function runSafetyChecks(name, args) {
       }
 
       // ── HARD RULE: bins_below is computed, never from LLM ─────────────────────────────────
+      // Also block downside_pct / upside_pct — these override bins_below in dlmm.js
+      // and would bypass the minBinsBelow safety floor. Agent must use bins_below only.
+      if (args.downside_pct != null || args.upside_pct != null) {
+        log("safety_block", `downside_pct/upside_pct blocked: these parameters override bins_below and bypass the min drawdown safety floor. Use bins_below only.`);
+        return {
+          pass: false,
+          reason: "downside_pct/upside_pct is disabled — these bypass the min drawdown safety rule. Use bins_below only.",
+        };
+      }
       // copy of computeBinsBelow from index.js — keep in sync
       function _computedBinsBelow(volatility, binStep) {
         const lo = config.strategy.minBinsBelow; // 69 fallback

@@ -176,14 +176,6 @@ WARNING: This executes a real on-chain transaction. Check DRY_RUN mode.`,
             type: "number",
             description: "Number of bins above the current active bin. Keep this at 0 for single-side SOL deploys. Only use this for dual-sided or explicit upside-exposure deploys."
           },
-          downside_pct: {
-            type: "number",
-            description: "Optional human-friendly downside range in percent below the current active price. Converted to bins internally via the Meteora SDK."
-          },
-          upside_pct: {
-            type: "number",
-            description: "Optional human-friendly upside range in percent above the current active price. Do not use this for single-side SOL deploys."
-          },
           pool_name: { type: "string", description: "Human-readable pool name for record-keeping" },
           base_mint: { type: "string", description: "Base token mint address — used to prevent duplicate token exposure across pools" },
           bin_step: { type: "number", description: "Pool bin step (from discover_pools)" },
