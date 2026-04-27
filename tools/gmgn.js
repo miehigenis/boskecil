@@ -665,6 +665,20 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
         filtered.push({ stage: 5, name: token.symbol || mint, reason: "incomplete pool mapping" });
         continue;
       }
+      // ── Volatility filter ──────────────────────────────────────────────────
+      const g = config.gmgn;
+      const minVol = g.minVolatility ?? 1;
+      const maxVol = g.maxVolatility ?? 15;
+      if (candidate.volatility != null) {
+        if (candidate.volatility < minVol) {
+          filtered.push({ stage: 5, name: token.symbol || mint, reason: `volatility ${candidate.volatility} < min ${minVol}` });
+          continue;
+        }
+        if (candidate.volatility > maxVol) {
+          filtered.push({ stage: 5, name: token.symbol || mint, reason: `volatility ${candidate.volatility} > max ${maxVol}` });
+          continue;
+        }
+      }
       pools.push(candidate);
     } catch (error) {
       log("gmgn", `Stage5 skip ${token.symbol || mint}: ${error.message}`);
