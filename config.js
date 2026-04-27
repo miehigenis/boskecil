@@ -62,7 +62,7 @@ export const config = {
 
   // ─── Pool Screening Thresholds ───────────
   screening: {
-    source:            u.screeningSource    ?? "meteora", // meteora | gmgn
+    source:            u.screening?.source ?? u.screeningSource ?? "meteora", // meteora | gmgn
     excludeHighSupplyConcentration: u.excludeHighSupplyConcentration ?? true,
     minFeeActiveTvlRatio: u.minFeeActiveTvlRatio ?? 0.05,
     minTvl:            u.minTvl            ?? 10_000,
@@ -293,7 +293,8 @@ export function reloadScreeningThresholds() {
   try {
     const fresh = readJsonIfExists(USER_CONFIG_PATH);
     const s = config.screening;
-    if (fresh.screeningSource != null) s.source = fresh.screeningSource;
+    if (fresh.screening?.source != null) s.source = fresh.screening.source;
+    else if (fresh.screeningSource != null) s.source = fresh.screeningSource;
     if (fresh.minFeeActiveTvlRatio != null) s.minFeeActiveTvlRatio = fresh.minFeeActiveTvlRatio;
     if (fresh.useDiscordSignals !== undefined) s.useDiscordSignals = fresh.useDiscordSignals;
     if (fresh.discordSignalMode != null) s.discordSignalMode = fresh.discordSignalMode;
