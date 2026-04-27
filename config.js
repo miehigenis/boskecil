@@ -2,6 +2,10 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
+// Load and decrypt .env FIRST — GMGN_API_KEY and other encrypted secrets live here.
+// This must run before any other code that reads process.env.
+import "./envcrypt.js";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
 const GMGN_CONFIG_PATH = path.join(__dirname, "gmgn-config.json");
@@ -28,8 +32,11 @@ if (u.llmApiKey)  process.env.LLM_API_KEY       ||= u.llmApiKey;
 if (u.dryRun !== undefined) process.env.DRY_RUN ||= String(u.dryRun);
 if (u.publicApiKey) process.env.PUBLIC_API_KEY ||= u.publicApiKey;
 if (u.agentMeridianApiUrl) process.env.AGENT_MERIDIAN_API_URL ||= u.agentMeridianApiUrl;
-if (gmgnUserConfig.apiKey || u.gmgnApiKey) {
-  process.env.GMGN_API_KEY ||= gmgnUserConfig.apiKey || u.gmgnApiKey;
+// GMGN_API_KEY lives in .env (encrypted). envcrypt.js decrypts it into process.env on import.
+// gmgn-config.json is NOT used for apiKey — only non-sensitive gmgn settings.
+// The "***" placeholder in gmgn-config.json is ignored; real key comes from .env.
+if (!process.env.GMGN_API_KEY && gmgnUserConfig.apiKey && gmgnUserConfig.apiKey !== "***") {
+  process.env.GMGN_API_KEY ||= gmgnUserConfig.apiKey;
 }
 
 const indicatorUserConfig = u.chartIndicators ?? {};
@@ -93,7 +100,8 @@ export const config = {
   },
 
   gmgn: {
-    apiKey: nonEmptyString(gmgnUserConfig.apiKey, u.gmgnApiKey, process.env.GMGN_API_KEY),
+    // Priority: .env (encrypted+decrypted by envcrypt.js) > gmgn-config.json > user-config.json > legacy env
+    apiKey: nonEmptyString(process.env.GMGN_API_KEY, gmgnUserConfig.apiKey, u.gmgnApiKey),
     baseUrl: nonEmptyString(gmgnUserConfig.baseUrl, u.gmgnBaseUrl, "https://openapi.gmgn.ai"),
     interval: gmgnValue("interval", "gmgnInterval", "5m"),
     orderBy: gmgnValue("orderBy", "gmgnOrderBy", "default"),

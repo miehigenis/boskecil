@@ -470,12 +470,19 @@ rl.close();
 if (!updates.walletKey && existing.walletKey) updates.walletKey = existing.walletKey;
 if (!updates.llmApiKey && existing.llmApiKey) updates.llmApiKey = existing.llmApiKey;
 if (!updates.hiveMindApiKey && existing.hiveMindApiKey) updates.hiveMindApiKey = existing.hiveMindApiKey;
-if (!gmgnUpdates.apiKey && existingGmgn.apiKey) gmgnUpdates.apiKey = existingGmgn.apiKey;
+// GMGN apiKey lives in .env (encrypted) — NOT in gmgn-config.json.
+// Do NOT copy existingGmgn.apiKey placeholder ("***") into gmgnUpdates.
+if (!gmgnUpdates.apiKey && existingGmgn.apiKey && existingGmgn.apiKey !== "***") {
+  gmgnUpdates.apiKey = existingGmgn.apiKey;
+}
 if (existing.agentId && !updates.agentId) updates.agentId = existing.agentId;
 updates.hiveMindUrl = DEFAULT_HIVEMIND_URL;
 
+// Strip "***" placeholder from gmgnUpdates before writing — GMGN key lives in .env only.
+const gmgnFinal = { ...gmgnUpdates };
+if (gmgnFinal.apiKey === "***") delete gmgnFinal.apiKey;
 fs.writeFileSync(CONFIG_PATH, JSON.stringify(updates, null, 2));
-fs.writeFileSync(GMGN_CONFIG_PATH, JSON.stringify(gmgnUpdates, null, 2));
+fs.writeFileSync(GMGN_CONFIG_PATH, JSON.stringify(gmgnFinal, null, 2));
 
 console.log(`
 ╔═══════════════════════════════════════════╗
