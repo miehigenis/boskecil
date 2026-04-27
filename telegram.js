@@ -394,9 +394,29 @@ async function poll(onMessage) {
 
 export function startPolling(onMessage) {
   if (!TOKEN) return;
+  setMyCommands().catch((e) => log("telegram", `setMyCommands failed: ${e.message}`));
   _polling = true;
   poll(onMessage); // fire-and-forget
   log("telegram", "Bot polling started");
+}
+
+async function setMyCommands() {
+  const commands = [
+    { command: "help",        description: "Show all commands" },
+    { command: "status",      description: "Wallet + positions snapshot" },
+    { command: "wallet",      description: "Wallet info" },
+    { command: "positions",   description: "List open positions" },
+    { command: "close",       description: "Close position (usage: /close <n>)" },
+    { command: "closeall",    description: "Close all positions" },
+    { command: "config",      description: "Show runtime config" },
+    { command: "settings",   description: "Button menu" },
+    { command: "screen",     description: "Trigger screening cycle" },
+    { command: "candidates",  description: "Show cached candidates" },
+    { command: "pause",      description: "Pause cron cycles" },
+    { command: "resume",     description: "Resume cron cycles" },
+  ];
+  await postTelegram("setMyCommands", { commands });
+  log("telegram", `setMyCommands registered: ${commands.length} commands`);
 }
 
 export function stopPolling() {
