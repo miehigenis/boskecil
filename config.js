@@ -97,6 +97,8 @@ export const config = {
     minTokenAgeHours:   u.minTokenAgeHours   ?? null, // null = no minimum
     maxTokenAgeHours:   u.maxTokenAgeHours   ?? null, // null = no maximum
     athFilterPct:       u.athFilterPct       ?? null, // e.g. -20 = only deploy if price is >= 20% below ATH
+    minVolatility:      u.minVolatility      ?? 1,
+    maxVolatility:      u.maxVolatility      ?? 15,
   },
 
   gmgn: {
@@ -154,6 +156,8 @@ export const config = {
         requireBbPosition:        r.requireBbPosition        ?? null,
       };
     })(),
+    minVolatility: gmgnValue("minVolatility", "gmgnMinVolatility", 1),
+    maxVolatility: gmgnValue("maxVolatility", "gmgnMaxVolatility", 15),
   },
 
   // ─── Position Management ────────────────
@@ -328,6 +332,8 @@ export function reloadScreeningThresholds() {
     if (fresh.maxBotHoldersPct  != null) s.maxBotHoldersPct = fresh.maxBotHoldersPct;
     if (fresh.allowedLaunchpads !== undefined) s.allowedLaunchpads = fresh.allowedLaunchpads;
     if (fresh.blockedLaunchpads !== undefined) s.blockedLaunchpads = fresh.blockedLaunchpads;
+    if (fresh.minVolatility   !== undefined) s.minVolatility   = fresh.minVolatility;
+    if (fresh.maxVolatility   !== undefined) s.maxVolatility   = fresh.maxVolatility;
   } catch { /* ignore */ }
   try {
     const freshGmgn = readJsonIfExists(GMGN_CONFIG_PATH);
