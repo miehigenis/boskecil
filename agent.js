@@ -173,9 +173,9 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
   // Track write tools fired this session — prevent the model from calling the same
   // destructive tool twice (e.g. deploy twice, swap twice after auto-swap)
   const ONCE_PER_SESSION = new Set(["deploy_position", "swap_token", "close_position"]);
-  // These lock after first attempt regardless of success — retrying them is always wrong
-  const NO_RETRY_TOOLS = new Set(["deploy_position"]);
-  const firedOnce = new Set();
+  // For deploy_position: key by pool_address + params so retries on the SAME pool with same params
+  // are allowed until the position is confirmed on-chain. Different pool = block.
+  const deployFired = new Map(); // key → true once confirmed
   const mustUseRealTool = shouldRequireRealToolUse(goal, agentType, interactive);
   let sawToolCall = false;
   let noToolRetryCount = 0;
@@ -312,26 +312,32 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
           }
         }
 
-        // Block once-per-session tools from firing a second time
-        if (ONCE_PER_SESSION.has(functionName) && firedOnce.has(functionName)) {
-          log("agent", `Blocked duplicate ${functionName} call — already executed this session`);
-          await onToolFinish?.({
-            name: functionName,
-            args: functionArgs,
-            result: { blocked: true, reason: `${functionName} already attempted this session — do not retry. If it failed, report the error and stop.` },
-            success: false,
-            step,
-          });
-          return {
-            role: "tool",
-            tool_call_id: toolCall.id,
-            content: JSON.stringify({ blocked: true, reason: `${functionName} already attempted this session — do not retry. If it failed, report the error and stop.` }),
-          };
+        // Block once-per-session tools from firing a second time.
+        // deploy_position uses pool+params as key — retries allowed on same pool if not yet confirmed.
+        if (ONCE_PER_SESSION.has(functionName)) {
+          const isDeploy = functionName === "deploy_position";
+          const blockKey = isDeploy
+            ? `${functionArgs.pool_address || functionArgs.pool_name || ""}|${JSON.stringify(functionArgs)}`
+            : functionName;
+          if (deployFired.has(blockKey)) {
+            log("agent", `Blocked duplicate ${functionName} call — already executed this session`);
+            await onToolFinish?.({
+              name: functionName,
+              args: functionArgs,
+              result: { blocked: true, reason: `${functionName} already attempted this session — do not retry. If it failed, report the error and stop.` },
+              success: false,
+              step,
+            });
+            return {
+              role: "tool",
+              tool_call_id: toolCall.id,
+              content: JSON.stringify({ blocked: true, reason: `${functionName} already attempted this session — do not retry. If it failed, report the error and stop.` }),
+            };
+          }
         }
 
         await onToolStart?.({ name: functionName, args: functionArgs, step });
         let result;
-        let didHardBlock = false;
         try {
           result = await executeTool(functionName, functionArgs);
         } catch (err) {
@@ -346,21 +352,15 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
           step,
         });
 
-        // deploy_position retries: only hard-block on actual deploy failures (RPC error, tx rejected, etc.)
-        // Soft-blocks (Meteora uninitialized bin arrays, bitmap extension, non-refundable rent cost)
-        // are Meteora infrastructure issues — do NOT count as a real attempt, give 2 chances
-        if (functionName === "deploy_position" && NO_RETRY_TOOLS.has(functionName)) {
-          const msg = (result?.error || result?.reason || "").toLowerCase();
-          const isBinArrayBlock = msg.includes("bin-array") || msg.includes("bin array")
-            || msg.includes("bitmap extension") || msg.includes("non-refundable");
-          if (!isBinArrayBlock) {
-            firedOnce.add(functionName); // real failure — lock
-          } else {
-            didHardBlock = true;
+        // deploy_position: lock only on confirmed success. Retries allowed on same pool if not yet confirmed.
+        // Different pool = separate key = not blocked.
+        if (functionName === "deploy_position") {
+          if (result?.success && !result?.error && !result?.blocked) {
+            const key = `${functionArgs.pool_address || functionArgs.pool_name || ""}|${JSON.stringify(functionArgs)}`;
+            deployFired.set(key, true);
+            log("agent", `deploy_position confirmed on-chain — locked for this session`);
           }
         }
-        // For close/swap: only lock on success so genuine failures can be retried
-        else if (ONCE_PER_SESSION.has(functionName) && result.success === true) firedOnce.add(functionName);
 
         return {
           role: "tool",
