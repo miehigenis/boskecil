@@ -634,7 +634,7 @@ async function runSafetyChecks(name, args) {
 
       // copy of computeBinsBelow from index.js — keep in sync
       function _computedBinsBelow(volatility, binStep) {
-        const lo = config.strategy.minBinsBelow; // 69 fallback
+        let lo = config.strategy.minBinsBelow; // 69 fallback — MUST be let, not const
         let hi = config.strategy.maxBinsBelow;   // 210 fallback
         if (binStep === 80)      { lo = 75;  hi = 173; }
         else if (binStep === 100) { lo = 60; hi = 140; }
