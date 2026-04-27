@@ -598,11 +598,16 @@ async function runSafetyChecks(name, args) {
       }
 
       // ── HARD RULE: bins_below is computed from REAL volatility, never from LLM args ────────
-      // Fetch real volatility from Meteora's Pool Discovery API — do NOT trust args.volatility
+      // Fetch real volatility AND bin_step from Meteora's Pool Discovery API — do NOT trust args
       let realVolatility = null;
+      let realBinStep = args.bin_step; // default to LLM-provided, override if Meteora has it
       try {
         const poolDetail = await getPoolDetail({ pool_address: args.pool_address, timeframe: "5m" });
         realVolatility = poolDetail?.volatility != null ? Number(poolDetail.volatility) : null;
+        if (poolDetail?.bin_step != null) {
+          realBinStep = Number(poolDetail.bin_step);
+          log("safety", `real_bin_step from Meteora: ${realBinStep} (LLM passed: ${args.bin_step})`);
+        }
         log("safety", `real_volatility fetched: ${realVolatility} for pool ${args.pool_address}`);
       } catch (err) {
         log("safety", `failed to fetch real volatility for ${args.pool_address}: ${err.message}`);
@@ -631,12 +636,12 @@ async function runSafetyChecks(name, args) {
       function _computedBinsBelow(volatility, binStep) {
         const lo = config.strategy.minBinsBelow; // 69 fallback
         let hi = config.strategy.maxBinsBelow;   // 210 fallback
-        if (binStep === 80)      { lo = 77;  hi = 173; }
-        else if (binStep === 100) { lo = 69; hi = 140; }
+        if (binStep === 80)      { lo = 75;  hi = 173; }
+        else if (binStep === 100) { lo = 60; hi = 140; }
         return Math.max(lo, Math.min(hi, Math.round(lo + ((Number(volatility) || 0) / 5) * (hi - lo))));
       }
-      const computedBins = _computedBinsBelow(volForCalc, args.bin_step);
-      log("safety", `bins_below check: LLM passed=${args.bins_below}, computed from real_vol=${volForCalc}=${computedBins}`);
+      const computedBins = _computedBinsBelow(volForCalc, realBinStep);
+      log("safety", `bins_below check: LLM passed=${args.bins_below}, computed from real_vol=${volForCalc}, real_bin_step=${realBinStep} → ${computedBins}`);
       if (args.bins_below !== computedBins) {
         log("safety", `bins_below override blocked: LLM passed ${args.bins_below}, forced to ${computedBins}`);
         args.bins_below = computedBins;
