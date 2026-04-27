@@ -154,7 +154,7 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
   // Build dynamic system prompt with current portfolio state
   const [portfolio, positions] = await Promise.all([getWalletBalances(), getMyPositions()]);
   const stateSummary = getStateSummary();
-  const lessons = getLessonsForPrompt({ agentType });
+  const lessons = ""; // getLessonsForPrompt({ agentType }) — disabled by user pref
   const perfSummary = getPerformanceSummary();
   const decisionSummary = getDecisionSummary();
   let weightsSummary = null;
