@@ -325,10 +325,11 @@ export async function createLiveMessage(title, intro = "Starting...") {
       }
       if (state.flushPromise) await state.flushPromise;
       // Convert markdown bold to HTML for Telegram
+      // Convert markdown bold to HTML for Telegram
       const html = finalText
         .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
-        .replace(/_(.+?)_/g, "<i>$1</i>")
-        .replace(/`(.+?)`/g, "<code>$1</code>");
+        // Strip raw HTML tags that aren't <b> — LLM sometimes leaks HTML
+        .replace(/<(?!\/?b>)[^>]+>/g, "");
       state.footer = html;
       await flushNow();
       _liveMessageDepth = Math.max(0, _liveMessageDepth - 1);
