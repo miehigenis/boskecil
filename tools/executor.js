@@ -586,6 +586,21 @@ async function runSafetyChecks(name, args) {
         };
       }
 
+      // ── HARD RULE: bins_below is computed, never from LLM ─────────────────────────────────
+      // copy of computeBinsBelow from index.js — keep in sync
+      function _computedBinsBelow(volatility, binStep) {
+        const lo = config.strategy.minBinsBelow; // 69 fallback
+        let hi = config.strategy.maxBinsBelow;   // 210 fallback
+        if (binStep === 80)      { lo = 75;  hi = 173; }
+        else if (binStep === 100) { lo = 60; hi = 140; }
+        return Math.max(lo, Math.min(hi, Math.round(lo + ((Number(volatility) || 0) / 5) * (hi - lo))));
+      }
+      const computedBins = _computedBinsBelow(args.volatility ?? 0, args.bin_step);
+      if (args.bins_below !== computedBins) {
+        log("safety", `bins_below override blocked: LLM passed ${args.bins_below}, forced to ${computedBins}`);
+        args.bins_below = computedBins;
+      }
+
       // Check SOL balance
       if (process.env.DRY_RUN !== "true") {
         const balance = await getWalletBalances();
