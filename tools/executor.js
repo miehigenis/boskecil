@@ -398,6 +398,17 @@ const toolMap = {
   },
 };
 
+// Maps position → close reason (set by management cycle before invoking agent)
+const _closeReasonMap = new Map();
+export function setCloseReason(position_address, reason) {
+  if (reason) _closeReasonMap.set(String(position_address), reason);
+}
+export function popCloseReason(position_address) {
+  const reason = _closeReasonMap.get(String(position_address));
+  _closeReasonMap.delete(String(position_address));
+  return reason;
+}
+
 // Tools that modify on-chain state (need extra safety checks)
 const WRITE_TOOLS = new Set([
   "deploy_position",
@@ -459,7 +470,7 @@ export async function executeTool(name, args) {
       } else if (name === "deploy_position") {
         notifyDeploy({ pair: result.pool_name || args.pool_name || args.pool_address?.slice(0, 8), amountSol: args.amount_y ?? args.amount_sol ?? 0, position: result.position, tx: result.txs?.[0] ?? result.tx, priceRange: result.price_range, rangeCoverage: result.range_coverage, binStep: result.bin_step, baseFee: result.base_fee }).catch(() => {});
       } else if (name === "close_position") {
-        notifyClose({ pair: result.pool_name || args.position_address?.slice(0, 8), pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0, reason: args.reason }).catch(() => {});
+        notifyClose({ pair: result.pool_name || args.position_address?.slice(0, 8), pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0, reason: args.reason || popCloseReason(args.position_address) }).catch(() => {});
         // Note low-yield closes in pool memory so screener avoids redeploying
         if (args.reason && args.reason.toLowerCase().includes("yield")) {
           const poolAddr = result.pool || args.pool_address;

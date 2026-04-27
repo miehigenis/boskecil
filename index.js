@@ -10,7 +10,7 @@ import { getTopCandidates } from "./tools/screening.js";
 import { formatGmgnCandidateForPrompt } from "./tools/gmgn.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
-import { executeTool, registerCronRestarter } from "./tools/executor.js";
+import { executeTool, registerCronRestarter, setCloseReason } from "./tools/executor.js";
 import {
   startPolling,
   stopPolling,
@@ -307,6 +307,14 @@ export async function runManagementCycle({ silent = false } = {}) {
 
     if (actionPositions.length > 0) {
       log("cron", `Management: ${actionPositions.length} action(s) needed — invoking LLM [model: ${config.llm.managementModel}]`);
+
+      // Pre-register close reasons so executor can inject them even if agent forgets to pass reason=
+      for (const p of actionPositions) {
+        const act = actionMap.get(p.position);
+        if (act.action === "CLOSE" && act.reason) {
+          setCloseReason(p.position, act.reason);
+        }
+      }
 
       // ── Fetch VWAP indicators for each action position (parallel) ──
       const vwapResults = await Promise.allSettled(
