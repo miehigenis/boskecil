@@ -642,16 +642,23 @@ async function runSafetyChecks(name, args) {
         args.bins_below = computedBins;
       }
 
-      // Check SOL balance
+      // Check SOL balance — auto-reduce amountY if needed, don't block
       if (process.env.DRY_RUN !== "true") {
         const balance = await getWalletBalances();
-        const gasReserve = config.management.gasReserve;
-        const minRequired = amountY + gasReserve;
-        if (balance.sol < minRequired) {
+        const gasReserve = config.management.gasReserve ?? 0.01;
+        const maxDeployable = balance.sol - gasReserve;
+        if (maxDeployable <= 0) {
           return {
             pass: false,
-            reason: `Insufficient SOL: have ${balance.sol} SOL, need ${minRequired} SOL (${amountY} deploy + ${gasReserve} gas reserve).`,
+            reason: `Insufficient SOL: have ${balance.sol} SOL, need at least ${gasReserve} SOL for gas.`,
           };
+        }
+        // Auto-reduce amountY to fit balance, log and continue
+        if (amountY > maxDeployable) {
+          log("safety", `amountY reduced: ${amountY} → ${maxDeployable} SOL (balance ${balance.sol} - gasReserve ${gasReserve})`);
+          args.amount_y = maxDeployable;
+          args.amount_sol = maxDeployable;
+          amountY = maxDeployable;
         }
       }
 
