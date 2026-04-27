@@ -259,7 +259,26 @@ export async function runManagementCycle({ silent = false } = {}) {
 
       const closeRule = getDeterministicCloseRule(p, config.management);
       if (closeRule) {
-        actionMap.set(p.position, closeRule);
+        // ── Deterministic CLOSE: execute directly, no LLM ──────────────────
+        setCloseReason(p.position, closeRule.reason);
+        log("state", `[Deterministic close] ${p.pair} — Rule ${closeRule.rule}: ${closeRule.reason} — executing close_position`);
+        const closeResult = await closePosition({ position_address: p.position, reason: closeRule.reason });
+        if (closeResult.success) {
+          log("state", `[Deterministic close] ${p.pair} — closed ✅ PnL: ${closeResult.pnl_pct}% ($${closeResult.pnl_usd})`);
+        } else {
+          log("error", `[Deterministic close] ${p.pair} — failed: ${JSON.stringify(closeResult)}`);
+        }
+        // Mark as STAY to exclude from LLM — already handled. Keep extra data for report.
+        actionMap.set(p.position, {
+          action: "STAY",
+          deterministicClose: true,
+          closeRule: closeRule.rule,
+          closeReason: closeRule.reason,
+          pnl_pct: closeResult.pnl_pct ?? null,
+          pnl_usd: closeResult.pnl_usd ?? null,
+          closeSuccess: closeResult.success,
+          closeError: closeResult.error || closeResult.reason || null,
+        });
         continue;
       }
       // Claim rule
@@ -287,6 +306,14 @@ export async function runManagementCycle({ silent = false } = {}) {
       if (act.action === "CLOSE" && act.rule === "exit") line += `\n⚡ Trailing TP: ${act.reason}`;
       if (act.action === "CLOSE" && act.rule && act.rule !== "exit") line += `\nRule ${act.rule}: ${act.reason}`;
       if (act.action === "CLAIM") line += `\n→ Claiming fees`;
+      // Deterministic close result
+      if (act.deterministicClose) {
+        if (act.closeSuccess) {
+          line += `\n✅ Rule ${act.closeRule}: ${act.closeReason} — CLOSED (PnL: ${act.pnl_pct}% (${act.pnl_usd != null ? (act.pnl_usd >= 0 ? "+" : "") + "$$" + act.pnl_usd : "?"}))`;
+        } else {
+          line += `\n❌ Rule ${act.closeRule}: ${act.closeReason} — CLOSE FAILED: ${act.closeError}`;
+        }
+      }
       return line;
     });
 
