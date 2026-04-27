@@ -575,7 +575,7 @@ async function runSafetyChecks(name, args) {
       }
 
       // Check amount limits
-      const amountY = args.amount_y ?? args.amount_sol ?? 0;
+      const amountY = Math.min(args.amount_y ?? args.amount_sol ?? 0, config.risk.maxDeployAmount);
       if (amountY <= 0) {
         return {
           pass: false,
@@ -597,9 +597,24 @@ async function runSafetyChecks(name, args) {
         };
       }
 
-      // ── HARD RULE: bins_below is computed, never from LLM ─────────────────────────────────
-      // downside_pct / upside_pct override bins_below in dlmm.js and bypass the minBinsBelow
-      // safety floor. Block entirely unless downside_pct >= 60 (60%+ coverage = safe).
+      // ── HARD RULE: bins_below is computed from REAL volatility, never from LLM args ────────
+      // Fetch real volatility from Meteora's Pool Discovery API — do NOT trust args.volatility
+      let realVolatility = null;
+      try {
+        const poolDetail = await getPoolDetail({ pool_address: args.pool_address, timeframe: "5m" });
+        realVolatility = poolDetail?.volatility != null ? Number(poolDetail.volatility) : null;
+        log("safety", `real_volatility fetched: ${realVolatility} for pool ${args.pool_address}`);
+      } catch (err) {
+        log("safety", `failed to fetch real volatility for ${args.pool_address}: ${err.message}`);
+      }
+      // Fall back to LLM-provided volatility only if Meteora fetch fails (and log warning)
+      const volForCalc = realVolatility ?? (args.volatility ?? 0);
+      if (realVolatility === null) {
+        log("safety_warn", `using LLM-provided volatility ${volForCalc} — Meteora fetch failed`);
+      }
+
+      // Also block downside_pct / upside_pct — these override bins_below in dlmm.js and bypass
+      // the minBinsBelow safety floor. Block entirely unless downside_pct >= 60.
       if (args.downside_pct != null || args.upside_pct != null) {
         const dp = Number(args.downside_pct ?? 0);
         if (dp < 60) {
@@ -611,6 +626,7 @@ async function runSafetyChecks(name, args) {
         }
         log("safety_block", `downside_pct/upside_pct overridden — ${dp}% >= 60% minimum, proceeding.`);
       }
+
       // copy of computeBinsBelow from index.js — keep in sync
       function _computedBinsBelow(volatility, binStep) {
         const lo = config.strategy.minBinsBelow; // 69 fallback
@@ -619,7 +635,8 @@ async function runSafetyChecks(name, args) {
         else if (binStep === 100) { lo = 69; hi = 140; }
         return Math.max(lo, Math.min(hi, Math.round(lo + ((Number(volatility) || 0) / 5) * (hi - lo))));
       }
-      const computedBins = _computedBinsBelow(args.volatility ?? 0, args.bin_step);
+      const computedBins = _computedBinsBelow(volForCalc, args.bin_step);
+      log("safety", `bins_below check: LLM passed=${args.bins_below}, computed from real_vol=${volForCalc}=${computedBins}`);
       if (args.bins_below !== computedBins) {
         log("safety", `bins_below override blocked: LLM passed ${args.bins_below}, forced to ${computedBins}`);
         args.bins_below = computedBins;
