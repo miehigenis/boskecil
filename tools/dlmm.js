@@ -1605,6 +1605,7 @@ export async function closePosition({ position_address, reason }) {
             pool: poolAddress,
             close_txs: closeTxHashes,
             txs: txHashes,
+            reason: reason || null,
           };
         }
 
@@ -1698,6 +1699,7 @@ export async function closePosition({ position_address, reason }) {
             pnl_usd: pnlUsd,
             pnl_pct: pnlPct,
             base_mint: livePosition?.base_mint || null,
+            reason: reason || null,
           };
         }
 
@@ -1712,19 +1714,22 @@ export async function closePosition({ position_address, reason }) {
           metrics: {},
         });
 
-        return {
-          success: true,
-          relay: true,
-          request_id: order.requestId,
-          position: position_address,
-          pool: poolAddress,
-          pool_name: poolMeta.name || null,
-          claim_txs: claimTxHashes,
-          close_txs: closeTxHashes,
-          txs: txHashes,
-          base_mint: livePosition?.base_mint || null,
-        };
-      } catch (relayError) {
+          return {
+            success: true,
+            relay: true,
+            request_id: order.requestId,
+            position: position_address,
+            pool: poolAddress,
+            pool_name: poolMeta.name || null,
+            claim_txs: claimTxHashes,
+            close_txs: closeTxHashes,
+            txs: txHashes,
+            pnl_usd: pnlUsd ?? null,
+            pnl_pct: pnlPct ?? null,
+            base_mint: livePosition?.base_mint || null,
+            reason: reason || null,
+          };
+        } catch (relayError) {
         if (relaySubmitted) throw relayError;
         log("close_warn", `Relay zap-out failed before submit; falling back to local close + Jupiter autoswap: ${relayError.message}`);
       }
@@ -1971,6 +1976,7 @@ export async function closePosition({ position_address, reason }) {
         pnl_usd: pnlUsd,
         pnl_pct: pnlPct,
         base_mint: pool.lbPair.tokenXMint.toString(),
+        reason: reason || null,
       };
     }
 

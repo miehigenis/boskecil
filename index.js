@@ -926,7 +926,7 @@ function getDeterministicCloseRule(position, managementConfig) {
   if (
     position.fee_per_tvl_24h != null &&
     position.fee_per_tvl_24h < managementConfig.minFeePerTvl24h &&
-    (position.age_minutes ?? 0) >= 15
+    (position.age_minutes ?? 0) >= managementConfig.minAgeBeforeYieldCheck
   ) {
     return { action: "CLOSE", rule: 5, reason: "low yield" };
   }
