@@ -954,8 +954,8 @@ function buildGmgnFunnelReport(stageCounts, allFiltered = [], { fromStage = 1 } 
 function computeBinsBelow(volatility, binStep = null) {
   let lo = config.strategy.minBinsBelow;
   let hi = config.strategy.maxBinsBelow; // fallback
-  if (binStep === 80)  { lo = 82;  hi = 189; }
-  else if (binStep === 100) { lo = 65; hi = 158; }
+  if (binStep === 80)  { lo = 131;  hi = 162; }
+  else if (binStep === 100) { lo = 105; hi = 161; }
   return Math.max(lo, Math.min(hi, Math.round(lo + ((Number(volatility) || 0) / 5) * (hi - lo))));
 }
 
