@@ -167,7 +167,7 @@ export const config = {
     outOfRangeBinsToClose: u.outOfRangeBinsToClose ?? 15,
     outOfRangeWaitMinutes: u.outOfRangeWaitMinutes ?? 10,
     oorCooldownTriggerCount: u.oorCooldownTriggerCount ?? 3,
-    oorCooldownHours:       u.oorCooldownHours       ?? 12,
+    oorCooldownHours:       u.oorCooldownHours       ?? 1,
     repeatDeployCooldownEnabled: u.repeatDeployCooldownEnabled ?? true,
     repeatDeployCooldownTriggerCount: u.repeatDeployCooldownTriggerCount ?? 3,
     repeatDeployCooldownHours: u.repeatDeployCooldownHours ?? 1,
@@ -177,7 +177,7 @@ export const config = {
     stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
     takeProfitPct:         u.takeProfitPct         ?? u.takeProfitFeePct ?? 8,
     minFeePerTvl24h:       u.minFeePerTvl24h       ?? 5,
-    minAgeBeforeYieldCheck: u.minAgeBeforeYieldCheck ?? 10, // minutes before low yield can trigger close
+    minAgeBeforeYieldCheck: u.minAgeBeforeYieldCheck ?? 15, // minutes before low yield can trigger close
     minSolToOpen:          u.minSolToOpen          ?? 0.02,
     deployAmountSol:       u.deployAmountSol       ?? 0.3,
     gasReserve:            u.gasReserve            ?? 0.01,
