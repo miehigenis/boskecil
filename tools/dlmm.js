@@ -876,10 +876,49 @@ export async function deployPosition({
         slippage: 10, // 10%
       });
       const addTxArray = Array.isArray(addTxs) ? addTxs : [addTxs];
+      const failedTxs = [];
       for (let i = 0; i < addTxArray.length; i++) {
-        const txHash = await sendAndConfirmTransaction(getConnection(), addTxArray[i], [wallet]);
-        txHashes.push(txHash);
-        log("deploy", `Add liquidity tx ${i + 1}/${addTxArray.length}: ${txHash}`);
+        try {
+          const txHash = await sendAndConfirmTransaction(getConnection(), addTxArray[i], [wallet]);
+          txHashes.push(txHash);
+          log("deploy", `Add liquidity tx ${i + 1}/${addTxArray.length}: ${txHash}`);
+        } catch (error) {
+          log("deploy_error", `Add liquidity tx ${i + 1}/${addTxArray.length} failed: ${error.message}`);
+          failedTxs.push(i + 1);
+          continue; // Don't abort — continue processing remaining txs
+        }
+      }
+
+      // Recovery: if some txs failed but position was created (tx1 succeeded), add remaining liquidity
+      if (failedTxs.length > 0) {
+        log("deploy", `${failedTxs.length}/${addTxArray.length} add liquidity tx(s) failed: [${failedTxs.join(", ")}]`);
+        // Position may exist — verify and attempt recovery
+        const refreshed = await getMyPositions({ force: true, silent: true }).catch(() => null);
+        const positionExists = refreshed?.positions?.find((p) => p.pool === pool_address);
+        if (positionExists) {
+          // Calculate remaining SOL based on failed fraction
+          const failedFraction = failedTxs.length / addTxArray.length;
+          const remainingSol = finalAmountY * failedFraction;
+          const remainingLamports = Math.floor(remainingSol * 1e9);
+          log("deploy", `Position exists with partial liquidity. Attempting recovery add: ${remainingSol.toFixed(4)} SOL (${failedFraction * 100}% missing)`);
+          try {
+            const addRemainingTx = await pool.addLiquidityByStrategy({
+              positionPubKey: newPosition.publicKey,
+              user: wallet.publicKey,
+              totalXAmount: new BN(0),
+              totalYAmount: new BN(remainingLamports),
+              strategy: { maxBinId, minBinId, strategyType },
+              slippage: 1000,
+            });
+            const recoveryHash = await sendAndConfirmTransaction(getConnection(), addRemainingTx, [wallet]);
+            txHashes.push(recoveryHash);
+            log("deploy", `Recovery add liquidity tx: ${recoveryHash}`);
+          } catch (recoveryError) {
+            log("deploy_error", `Recovery add liquidity failed: ${recoveryError.message} — position remains partial`);
+          }
+        } else {
+          log("deploy_error", "Position was not created — cannot recover");
+        }
       }
     } else {
       // ── Standard Path (≤69 bins) ─────────────────────────────────
