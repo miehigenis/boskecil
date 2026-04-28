@@ -208,6 +208,19 @@ export async function discoverPools({
 
   const condensed = rawPools.map(condensePool);
 
+  // ── Hard-filter: only SOL quote pairs ─────────────────────────────────────
+  const SOL_MINT = config.tokens.SOL;
+  let preFiltered = condensed.length;
+  condensed = condensed.filter((p) => {
+    // Accept only pools where token_x OR token_y is SOL
+    if (p.base?.mint === SOL_MINT || p.quote?.mint === SOL_MINT) return true;
+    log("screening", `Filtered non-SOL pair ${p.name} (${p.base?.symbol}/${p.quote?.symbol})`);
+    return false;
+  });
+  if (preFiltered - condensed.length > 0) {
+    log("screening", `Filtered ${preFiltered - condensed.length} non-SOL pair(s) from Meteora fallback`);
+  }
+
   // Hard-filter blacklisted tokens and blocked deployers (what pool discovery already gave us)
   let pools = condensed.filter((p) => {
     if (isBlacklisted(p.base?.mint)) {
