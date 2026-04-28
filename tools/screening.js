@@ -269,18 +269,30 @@ export async function discoverPools({
  */
 export async function getTopCandidates({ limit = 10 } = {}) {
   const { config } = await import("../config.js");
-  const source = String(config.screening.source || "meteora").toLowerCase();
+  let source = String(config.screening.source || "meteora").toLowerCase();
   if (!["meteora", "gmgn"].includes(source)) {
     throw new Error(`Invalid screeningSource: ${config.screening.source}. Use meteora or gmgn.`);
   }
-  const discovery = source === "gmgn"
-    ? await discoverGmgnPools({ limit: Math.max(limit, config.gmgn.enrichLimit || 20) })
-    : await discoverPools({ page_size: 50 });
+
+  // Discover pools — GMGN primary, Meteora fallback on error/limit
+  let discovery;
+  let poolsSource = source;
+  if (source === "gmgn") {
+    try {
+      discovery = await discoverGmgnPools({ limit: Math.max(limit, config.gmgn.enrichLimit || 20) });
+    } catch (gmgnErr) {
+      log("screening_warn", `GMGN screening failed: ${gmgnErr.message} — falling back to Meteora`);
+      discovery = await discoverPools({ page_size: 50 });
+      poolsSource = "meteora-fallback";
+    }
+  } else {
+    discovery = await discoverPools({ page_size: 50 });
+  }
   let { pools } = discovery;
   const filteredOut = Array.isArray(discovery.filtered_examples) ? [...discovery.filtered_examples] : [];
 
   // Token blacklist + dev blocklist (Meteora path runs these inside discoverPools; GMGN path does not)
-  if (source === "gmgn") {
+  if (poolsSource === "gmgn") {
     const before = pools.length;
     pools = pools.filter((p) => {
       if (isBlacklisted(p.base?.mint)) {
