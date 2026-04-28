@@ -10,7 +10,52 @@ setDefaultResultOrder("ipv4first");
 
 const METEORA_DLMM_API = "https://dlmm.datapi.meteora.ag";
 const SUPPORTED_INTERVALS = new Set(["1m", "5m", "1h", "6h", "24h"]);
+const RATE_WINDOW_MS = 60_000; // 60-second rolling window
+
 let lastGmgnRequestAt = 0;
+let gmgnCallTimestamps = []; // timestamps of GMGN API calls within the rolling window
+
+// ── Rate Limit Tracker ──────────────────────────────────────────────────────
+
+/**
+ * Tracks a new GMGN API call in the rolling window.
+ * Returns how many calls have been made in the last 60 seconds.
+ */
+function trackGmgnCall() {
+  const now = Date.now();
+  const windowStart = now - RATE_WINDOW_MS;
+  gmgnCallTimestamps = gmgnCallTimestamps.filter((ts) => ts > windowStart);
+  gmgnCallTimestamps.push(now);
+  return gmgnCallTimestamps.length;
+}
+
+/**
+ * Returns current GMGN rate limit status.
+ * @returns {{ callsInWindow: number, maxCallsPerMinute: number, resetInMs: number|null }}
+ */
+export function getGmgnRateLimitStatus() {
+  const now = Date.now();
+  const windowStart = now - RATE_WINDOW_MS;
+  const activeCalls = gmgnCallTimestamps.filter((ts) => ts > windowStart);
+  const maxAllowed = Math.max(1, Number(config.gmgn?.maxCallsPerMinute ?? 15));
+  const oldestCall = activeCalls.length > 0 ? Math.min(...activeCalls) : null;
+  const resetInMs = oldestCall != null ? Math.max(0, oldestCall + RATE_WINDOW_MS - now) : 0;
+  return {
+    callsInWindow: activeCalls.length,
+    maxCallsPerMinute: maxAllowed,
+    resetInMs,
+  };
+}
+
+/**
+ * Logs current GMGN rate limit status. Called periodically or when throttling kicks in.
+ */
+function logGmgnRateLimitStatus() {
+  const { callsInWindow, maxCallsPerMinute, resetInMs } = getGmgnRateLimitStatus();
+  const pct = maxCallsPerMinute > 0 ? ((callsInWindow / maxCallsPerMinute) * 100).toFixed(0) : 0;
+  const resetSec = (resetInMs / 1000).toFixed(0);
+  log("gmgn_rate", `[GMGN Rate] ${callsInWindow}/${maxCallsPerMinute} calls in 60s (${pct}%) — ${resetInMs > 0 ? `reset in ${resetSec}s` : "window clear"}`);
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -19,9 +64,18 @@ function sleep(ms) {
 async function paceGmgnRequest() {
   const delayMs = Math.max(0, Number(config.gmgn?.requestDelayMs ?? 2500));
   if (!delayMs) return;
+
+  // ── Rate limit check: wait if approaching max calls in window ────────────
+  const { callsInWindow, maxCallsPerMinute, resetInMs } = getGmgnRateLimitStatus();
+  if (callsInWindow >= maxCallsPerMinute) {
+    log("gmgn_rate", `[GMGN Rate] At ${callsInWindow}/${maxCallsPerMinute} — waiting ${(resetInMs / 1000).toFixed(1)}s for window reset before proceeding`);
+    await sleep(resetInMs + 100);
+  }
+
   const elapsed = Date.now() - lastGmgnRequestAt;
   if (elapsed < delayMs) await sleep(delayMs - elapsed);
   lastGmgnRequestAt = Date.now();
+  trackGmgnCall(); // record this call
 }
 
 function getApiKey() {

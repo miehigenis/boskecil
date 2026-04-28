@@ -112,6 +112,7 @@ export const config = {
     enrichLimit: gmgnValue("enrichLimit", "gmgnEnrichLimit", 20),
     requestDelayMs: gmgnValue("requestDelayMs", "gmgnRequestDelayMs", 350),
     maxRetries: gmgnValue("maxRetries", "gmgnMaxRetries", 2),
+    maxCallsPerMinute: gmgnValue("maxCallsPerMinute", "gmgnMaxCallsPerMinute", 15),
     holdersLimit: gmgnValue("holdersLimit", "gmgnHoldersLimit", 100),
     klineResolution: gmgnValue("klineResolution", "gmgnKlineResolution", "5m"),
     klineLookbackMinutes: gmgnValue("klineLookbackMinutes", "gmgnKlineLookbackMinutes", 60),
