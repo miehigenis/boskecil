@@ -502,6 +502,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
     const gmgnStageCounts = topCandidates?.stage_counts ?? null;
     const gmgnStagePassing = topCandidates?.stage_passing ?? null;
     const gmgnAllFiltered = topCandidates?.all_filtered ?? [];
+    const gmgnAllRejected = topCandidates?.filtered_examples ?? [];
 
     const allCandidates = [];
     for (const pool of candidates) {
@@ -552,7 +553,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
       const combinedExamples = combined.slice(0, 5)
         .map((entry) => `- ${entry.name}: ${entry.reason}`)
         .join("\n");
-      const funnelBlock = buildGmgnFunnelReport(gmgnStageCounts, gmgnStagePassing, { fromStage: 1 });
+      const funnelBlock = buildGmgnFunnelReport(gmgnStageCounts, gmgnStagePassing, gmgnAllRejected, { fromStage: 1 });
       const thresholds = `Thresholds: tvl>$${config.screening.minTvl} | vol>$${config.screening.minVolume} | organic>${config.screening.minOrganic}% | holders>${config.screening.minHolders} | fee/tvl>${config.screening.minFeeActiveTvlRatio}%`;
       screenReport = funnelBlock
         ? `No candidates available.\n\n${funnelBlock}`
@@ -570,7 +571,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
     }
 
     if (passing.length <= 1 && gmgnStageCounts) {
-      const funnelBlock = buildGmgnFunnelReport(gmgnStageCounts, gmgnStagePassing, { fromStage: 1 });
+      const funnelBlock = buildGmgnFunnelReport(gmgnStageCounts, gmgnStagePassing, gmgnAllRejected, { fromStage: 1 });
       if (funnelBlock) log("screening", `GMGN funnel (sparse):\n${funnelBlock}`);
     }
 
@@ -735,7 +736,7 @@ IMPORTANT:
         onToolStart: async ({ name }) => { await liveMessage?.toolStart(name); },
         onToolFinish: async ({ name, result, success }) => { await liveMessage?.toolFinish(name, result, success); },
       });
-    const funnelAppend = buildGmgnFunnelReport(gmgnStageCounts, gmgnStagePassing, { fromStage: 1 });
+    const funnelAppend = buildGmgnFunnelReport(gmgnStageCounts, gmgnStagePassing, gmgnAllRejected, { fromStage: 1 });
     screenReport = funnelAppend ? `${content}\n\n─────────────\n${funnelAppend}` : content;
     if (/⛔\s*NO DEPLOY/i.test(content)) {
       appendDecision({
@@ -937,21 +938,39 @@ function getDeterministicCloseRule(position, managementConfig) {
   return null;
 }
 
-function buildGmgnFunnelReport(stageCounts, stagePassing = {}, { fromStage = 1 } = {}) {
+function buildGmgnFunnelReport(stageCounts, stagePassing = {}, stageRejected = [], { fromStage = 1 } = {}) {
   if (!stageCounts) return null;
   const sc = stageCounts;
   const funnel = `GMGN funnel: ranked=<b>${sc.ranked ?? "?"}</b> → S1=<b>${sc.s1 ?? "?"}</b> → S1.5=<b>${sc.s1b ?? "?"}</b> → S2=<b>${sc.s2 ?? "?"}</b> → S3=<b>${sc.s3 ?? "?"}</b> → S4=<b>${sc.s4 ?? "?"}</b> → final=<b>${sc.s5 ?? "?"}</b>`;
   const byStage = {};
+
+  // Add passing candidates
   for (const [stageKey, items] of Object.entries(stagePassing || {})) {
     if (!Array.isArray(items) || items.length === 0) continue;
     const stageNum = parseInt(stageKey.replace(/\D/g, '')) || 0;
     if (stageNum < fromStage) continue;
-    if (!byStage[stageKey]) byStage[stageKey] = [];
-    byStage[stageKey] = items.slice(0, 15).map(item => `${item.name}: ${item.reason}`);
+    if (!byStage[stageKey]) byStage[stageKey] = { pass: [], fail: [] };
+    byStage[stageKey].pass = items.slice(0, 20).map(item => `${item.name}: ${item.reason}`);
   }
+
+  // Add rejected candidates
+  for (const rejected of (stageRejected || [])) {
+    if (!rejected.stage) continue;
+    const stageKey = `s${rejected.stage}`;
+    const stageNum = parseInt(String(rejected.stage)) || 0;
+    if (stageNum < fromStage) continue;
+    if (!byStage[stageKey]) byStage[stageKey] = { pass: [], fail: [] };
+    byStage[stageKey].fail.push(`${rejected.name}: ${rejected.reason}`);
+  }
+
   const stageLabels = { s1: "S1 rank", s1b: "S1.5 OKX", s2: "S2 info", s3: "S3 pool", s4: "S4 indicators", s5: "S5 pick" };
   const details = Object.entries(byStage)
-    .map(([key, items]) => `<b>${stageLabels[key] || key}</b> (${items.length})\n${items.map(r => `  ✓ ${r}`).join("\n")}`)
+    .map(([key, { pass, fail }]) => {
+      let lines = [`<b>${stageLabels[key] || key}:</b>`];
+      if (pass.length) lines.push(...pass.map(r => `  ✓ ${r}`));
+      if (fail.length) lines.push(...fail.slice(0, 10).map(r => `  ✗ ${r}`));
+      return lines.join("\n");
+    })
     .join("\n");
   return details ? `${funnel}\n\n${details}` : funnel;
 }
