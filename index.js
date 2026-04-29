@@ -304,7 +304,10 @@ export async function runManagementCycle({ silent = false } = {}) {
       const pnlUsd = (p.pnl_usd != null) ? (p.pnl_usd >= 0 ? `+$${p.pnl_usd.toFixed(2)}` : `-$${Math.abs(p.pnl_usd).toFixed(2)}`) : null;
       const pnlStr = pnlUsd ? `${p.pnl_pct ?? "?"}% (${pnlUsd})` : `${p.pnl_pct ?? "?"}%`;
       const statusLabel = act.action === "INSTRUCTION" ? "HOLD (instruction)" : act.action;
-      let line = `**${p.pair}** | Age: ${p.age_minutes ?? "?"}m | Val: ${val} | Unclaimed: ${unclaimed} | PnL: ${pnlStr} | Yield: ${p.fee_per_tvl_24h ?? "?"}% | ${inRange} | ${statusLabel}`;
+      let ageStr = p.age_minutes != null
+        ? (p.age_minutes >= 60 ? `${(p.age_minutes / 60).toFixed(1).replace(/\.0$/, "")}h` : `${p.age_minutes}m`)
+        : "?";
+      let line = `**${p.pair}** | Age: ${ageStr} | Val: ${val} | Unclaimed: ${unclaimed} | PnL: ${pnlStr} | Yield: ${p.fee_per_tvl_24h ?? "?"}% | ${inRange} | ${statusLabel}`;
       if (p.instruction) line += `\nNote: "${p.instruction}"`;
       if (act.action === "CLOSE" && act.rule === "exit") line += `\n⚡ Trailing TP: ${act.reason}`;
       if (act.action === "CLOSE" && act.rule && act.rule !== "exit") line += `\nRule ${act.rule}: ${act.reason}`;
@@ -1620,7 +1623,7 @@ async function telegramHandler(msg) {
         `Range: ${pos.lower_bin} → ${pos.upper_bin} | active ${pos.active_bin}`,
         `PnL: ${pos.pnl_pct ?? "?"}% | fees: ${config.management.solMode ? "◎" : "$"}${pos.unclaimed_fees_usd ?? "?"}`,
         `Value: ${config.management.solMode ? "◎" : "$"}${pos.total_value_usd ?? "?"}`,
-        `Age: ${pos.age_minutes ?? "?"}m | ${pos.in_range ? "IN RANGE" : `OOR ${pos.minutes_out_of_range ?? 0}m`}`,
+        `Age: ${pos.age_minutes != null ? (pos.age_minutes >= 60 ? `${(pos.age_minutes / 60).toFixed(1).replace(/\.0$/, "")}h` : `${pos.age_minutes}m`) : "?"} | ${pos.in_range ? "IN RANGE" : `OOR ${pos.minutes_out_of_range ?? 0}m`}`,
         pos.instruction ? `Note: ${pos.instruction}` : null,
       ].filter(Boolean).join("\n"));
     } catch (e) {
