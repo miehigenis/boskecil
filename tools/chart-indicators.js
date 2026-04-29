@@ -201,6 +201,20 @@ function evaluatePreset(side, preset, payload) {
             reason: `RSI ${rsi ?? "n/a"} >= overbought ${overbought}`,
             signal: summary,
           };
+    case "rsi_extreme":
+      return side === "entry"
+        ? {
+            confirmed: rsi != null && (rsi <= oversold || rsi >= overbought),
+            reason: rsi <= oversold
+              ? `RSI ${rsi ?? "n/a"} oversold (<= ${oversold})`
+              : `RSI ${rsi ?? "n/a"} overbought (>= ${overbought})`,
+            signal: summary,
+          }
+        : {
+            confirmed: rsi != null && rsi >= overbought,
+            reason: `RSI ${rsi ?? "n/a"} >= overbought ${overbought}`,
+            signal: summary,
+          };
     case "bollinger_reversion":
       return side === "entry"
         ? {
