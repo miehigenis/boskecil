@@ -123,11 +123,11 @@ Before `deploy_position` executes:
 Linear formula based on pool volatility (set in screener prompt, `index.js`):
 
 ```
-bins_below = round(35 + (volatility / 5) * 34), clamped to [35, 69]
+bins_below = round(35 + (volatility / 5) * 34), clamped to [100, 200]
 ```
 
 - Low volatility (0) → 35 bins
-- High volatility (5+) → 69 bins
+- High volatility (5+) → 200 bins
 - Any value in between is valid (continuous, not tiered)
 
 ---
@@ -158,8 +158,8 @@ Two signals used in `getTokenHolders()`:
 - `common_funder` — multiple wallets funded by same source
 - `funded_same_window` — multiple wallets funded in same time window
 
-**Thresholds in config**: `maxBundlersPct` (default 30%), `maxTop10Pct` (default 60%)
-Jupiter audit API: `botHoldersPercentage` (5–25% is normal for legitimate tokens)
+**Thresholds in config**: `maxBundlersPct` (default 35%), `maxTop10Pct` (default 30%)
+Jupiter audit API: `botHoldersPercentage` (5–30% is normal for legitimate tokens)
 
 ---
 

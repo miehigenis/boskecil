@@ -133,13 +133,10 @@ async function gmgnFetch(pathname, { method = "GET", params = {}, body = null } 
     const message = payload?.message || payload?.error || payload?.raw || `GMGN ${pathname} ${res.status}`;
     const rateLimited = res.status === 429 || /rate limit|temporarily banned/i.test(String(message));
     if (res.ok) return payload;
+    if (/temporarily banned/i.test(String(message))) throw new Error(message); // fail fast — no retry on IP ban
     if (rateLimited && attempt < maxRetries) {
       const retryAfter = Number(res.headers.get("retry-after"));
-      const backoffMs = Number.isFinite(retryAfter)
-        ? retryAfter * 1000
-        : /temporarily banned/i.test(String(message))
-          ? 60000
-          : Math.min(30000, 3000 * Math.pow(2, attempt));
+      const backoffMs = Number.isFinite(retryAfter) ? retryAfter * 1000 : Math.min(30000, 3000 * Math.pow(2, attempt));
       await sleep(backoffMs);
       continue;
     }
@@ -575,6 +572,7 @@ async function checkBounceSetup(mint) {
 export async function discoverGmgnPools({ limit = 10 } = {}) {
   const g = config.gmgn;
   const filtered = [];
+  const stagePassing = {};
   const stageCounts = {};
 
   // ── Stage 1: rank filter ──────────────────────────────────────────────────
@@ -600,6 +598,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
   }).sort((a, b) => num(b.volume) - num(a.volume))
     .slice(0, Math.max(limit, Number(g.enrichLimit || 20)));
   stageCounts.s1 = s1.length;
+  stagePassing.s1 = s1.map((t) => ({ name: t.symbol || t.address, reason: "passed rank filter" }));
   log("gmgn", `Stage1 rank: ${ranked.length} → ${s1.length} pass`);
 
   // ── Stage 1.5: OKX suspicious_pct filter ──────────────────────────────────
@@ -623,6 +622,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
     }
   }
   stageCounts.s1b = s1b.length;
+  stagePassing.s1b = s1b.map((entry) => ({ name: entry.token.symbol || entry.token.address, reason: "passed OKX filter" }));
   log("gmgn", `Stage1.5 OKX: ${s1.length} → ${s1b.length} pass`);
 
   // ── Stage 2: token info filter ────────────────────────────────────────────
@@ -644,6 +644,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
     }
   }
   stageCounts.s2 = s2.length;
+  stagePassing.s2 = s2.map((entry) => ({ name: entry.token.symbol || entry.token.address, reason: "passed info filter" }));
   log("gmgn", `Stage2 info: ${s1.length} → ${s2.length} pass`);
 
   // ── Stage 3: holders/traders enrichment (no hard filter) + Meteora pool ──
@@ -676,6 +677,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
     }
   }
   stageCounts.s3 = s3.length;
+  stagePassing.s3 = s3.map((entry) => ({ name: entry.token.symbol || entry.token.address, reason: "found Meteora pool" }));
   log("gmgn", `Stage3 pool: ${s2.length} → ${s3.length} pass`);
 
   // ── Stage 4: Meridian chart indicators ────────────────────────────────────
@@ -700,6 +702,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
     s4.push(...s3);
   }
   stageCounts.s4 = s4.length;
+  stagePassing.s4 = s4.map((entry) => ({ name: entry.token.symbol || entry.token.address, reason: "passed indicators" }));
   log("gmgn", `Stage4 indicators: ${s3.length} → ${s4.length} pass`);
 
   // ── Stage 5: pick best pool ───────────────────────────────────────────────
@@ -740,11 +743,13 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
     }
   }
   stageCounts.s5 = pools.length;
+  stagePassing.s5 = pools.map((p) => ({ name: p.name || p.base?.symbol, reason: "volatility OK" }));
   log("gmgn", `Stage5 final: ${s4.length} → ${pools.length} candidates`);
 
   return {
     total: ranked.length,
     stage_counts: stageCounts,
+    stage_passing: stagePassing,
     pools,
     filtered_examples: filtered,
   };

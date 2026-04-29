@@ -11,9 +11,9 @@ const DATAPI_JUP = "https://datapi.jup.ag/v1";
 const POOL_DISCOVERY_BASE = "https://pool-discovery-api.datapi.meteora.ag";
 const PVP_SHORTLIST_LIMIT = 2;
 const PVP_RIVAL_LIMIT = 2;
-const PVP_MIN_ACTIVE_TVL = 5_000;
+const PVP_MIN_ACTIVE_TVL = 2_000;
 const PVP_MIN_HOLDERS = 500;
-const PVP_MIN_GLOBAL_FEES_SOL = 30;
+const PVP_MIN_GLOBAL_FEES_SOL = 20;
 
 function normalizeSymbol(symbol) {
   return String(symbol || "").trim().toUpperCase();
@@ -110,7 +110,7 @@ async function enrichPvpRisk(pools) {
  * Returns condensed data optimized for LLM consumption (saves tokens).
  */
 export async function discoverPools({
-  page_size = 50,
+  page_size = 20,
 } = {}) {
   const s = config.screening;
   const filters = [
@@ -154,6 +154,7 @@ export async function discoverPools({
     headers: useServerDiscovery && config.api.publicApiKey
       ? { "x-api-key": config.api.publicApiKey }
       : {},
+    signal: AbortSignal.timeout(15000),
   });
 
   if (!res.ok) {
@@ -206,7 +207,7 @@ export async function discoverPools({
     }
   }
 
-  const condensed = rawPools.map(condensePool);
+  let condensed = rawPools.map(condensePool);
 
   // ── Hard-filter: only SOL quote pairs ─────────────────────────────────────
   const SOL_MINT = config.tokens.SOL;
@@ -582,6 +583,7 @@ export async function getPoolDetail({ pool_address, timeframe = "5m" }) {
     headers: useServerDiscovery && config.api.publicApiKey
       ? { "x-api-key": config.api.publicApiKey }
       : {},
+    signal: AbortSignal.timeout(15000),
   });
 
   if (!res.ok) {

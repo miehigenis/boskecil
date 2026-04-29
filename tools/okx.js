@@ -46,6 +46,7 @@ async function okxRequest(method, path, body = null) {
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers,
+    signal: AbortSignal.timeout(8000),
     ...(body != null ? { body: bodyText } : {}),
   });
   if (!res.ok) throw new Error(`OKX API ${res.status}: ${path}`);
@@ -90,7 +91,7 @@ async function fetchServerOkxEnrichment(tokenAddress, chainIndex = CHAIN_SOLANA)
   }
 
   const url = `${baseUrl}/okx/enrich/${encodeURIComponent(tokenAddress)}?chainIndex=${encodeURIComponent(chainIndex)}`;
-  const promise = fetch(url, { headers: agentMeridianHeaders() })
+  const promise = fetch(url, { headers: agentMeridianHeaders(), signal: AbortSignal.timeout(8000) })
     .then(async (res) => {
       const text = await res.text();
       const payload = text ? JSON.parse(text) : null;
