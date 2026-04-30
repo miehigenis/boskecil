@@ -418,6 +418,9 @@ async function setMyCommands() {
     { command: "settings",   description: "Button menu" },
     { command: "screen",     description: "Trigger screening cycle" },
     { command: "candidates",  description: "Show cached candidates" },
+    { command: "whitelist",  description: "Show whitelist" },
+    { command: "wladd",      description: "Add to whitelist: /wladd <mint> [hours] [note]" },
+    { command: "wlremove",   description: "Remove from whitelist: /wlremove <mint>" },
     { command: "pause",      description: "Pause cron cycles" },
     { command: "resume",     description: "Resume cron cycles" },
   ];

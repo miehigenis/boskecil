@@ -3,11 +3,15 @@
  *
  * Keyed by pool address. Automatically updated when positions close
  * (via recordPerformance in lessons.js). Agent can query before deploying.
+ *
+ * Whitelist tokens bypass cooldown checks — pool memory cooldowns do not
+ * block whitelist tokens from being re-screened or re-deployed.
  */
 
 import fs from "fs";
 import { log } from "./logger.js";
 import { config } from "./config.js";
+import { isWhitelisted } from "./whitelist.js";
 
 const POOL_MEMORY_FILE = "./pool-memory.json";
 const MAX_NOTE_LENGTH = 280;
@@ -215,8 +219,13 @@ export function recordPoolDeploy(poolAddress, deployData) {
   log("pool-memory", `Recorded deploy for ${entry.name} (${poolAddress.slice(0, 8)}): PnL ${deploy.pnl_pct}%`);
 }
 
-export function isPoolOnCooldown(poolAddress) {
+export function isPoolOnCooldown(poolAddress, baseMint = null) {
   if (!poolAddress) return false;
+  // Whitelist tokens bypass pool memory cooldown
+  if (baseMint && isWhitelisted(baseMint)) {
+    log("pool-memory", `Whitelist cooldown bypass for pool ${poolAddress.slice(0, 8)}`);
+    return false;
+  }
   const db = load();
   const entry = db[poolAddress];
   if (!entry?.cooldown_until) return false;
@@ -225,6 +234,11 @@ export function isPoolOnCooldown(poolAddress) {
 
 export function isBaseMintOnCooldown(baseMint) {
   if (!baseMint) return false;
+  // Whitelist tokens bypass base-mint cooldown
+  if (isWhitelisted(baseMint)) {
+    log("pool-memory", `Whitelist cooldown bypass for mint ${baseMint.slice(0, 8)}`);
+    return false;
+  }
   const db = load();
   const now = new Date();
   return Object.values(db).some((entry) =>

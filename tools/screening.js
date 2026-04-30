@@ -340,7 +340,7 @@ export async function getTopCandidates({ limit = 10 } = {}) {
         pushFilteredReason(filteredOut, p, "already holding this base token in another pool");
         return false;
       }
-      if (isPoolOnCooldown(p.pool)) {
+      if (isPoolOnCooldown(p.pool, p.base?.mint)) {
         log("screening", `Filtered cooldown pool ${p.name} (${p.pool.slice(0, 8)})`);
         pushFilteredReason(filteredOut, p, "pool cooldown active");
         return false;

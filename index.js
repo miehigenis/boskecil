@@ -1721,6 +1721,37 @@ async function telegramHandler(msg) {
     return;
   }
 
+  // ── whitelist commands ─────────────────────────────────────────────────────
+  if (text === "/whitelist" || text === "/wl") {
+    const { formatWhitelist } = await import("./whitelist.js");
+    await sendMessage(formatWhitelist()).catch(() => {});
+    return;
+  }
+
+  // whitelist mint = base58, 32-44 chars
+  const wlAddMatch = text.match(/^\/wladd\s+([A-Za-z0-9]{32,44})(?:\s+(\d+(?:\.\d+)?))?(?:\s+(.+))?$/i);
+  if (wlAddMatch) {
+    const mint = wlAddMatch[1].trim();
+    const ttlHours = wlAddMatch[2] ? parseFloat(wlAddMatch[2]) : null;
+    const note = wlAddMatch[3]?.trim() || null;
+    const { addToWhitelist } = await import("./whitelist.js");
+    const { config } = await import("./config.js");
+    const { chatId } = msg;
+    addToWhitelist(mint, ttlHours, `telegram:${chatId}`, note);
+    const ttl = ttlHours ?? config.screening?.whitelistTtlHours ?? 6;
+    await sendMessage(`Added <code>${mint.slice(0, 8)}...</code> to whitelist (TTL: ${ttl}h)${note ? ` | ${note}` : ""}`).catch(() => {});
+    return;
+  }
+
+  const wlRemoveMatch = text.match(/^\/wlremove\s+([A-Za-z0-9]{32,44})$/i);
+  if (wlRemoveMatch) {
+    const mint = wlRemoveMatch[1].trim();
+    const { removeFromWhitelist } = await import("./whitelist.js");
+    const removed = removeFromWhitelist(mint);
+    await sendMessage(removed ? `Removed <code>${mint.slice(0, 12)}...</code> from whitelist.` : `Not in whitelist: <code>${mint.slice(0, 12)}...</code>`).catch(() => {});
+    return;
+  }
+
   const deployMatch = text.match(/^\/deploy\s+(\d+)$/i);
   if (deployMatch) {
     try {

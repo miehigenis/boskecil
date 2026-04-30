@@ -25,6 +25,7 @@ import {
 } from "../state.js";
 import { recordPerformance } from "../lessons.js";
 import { isBaseMintOnCooldown, isPoolOnCooldown } from "../pool-memory.js";
+import { isWhitelisted } from "../whitelist.js";
 import { normalizeMint } from "./wallet.js";
 import { appendDecision } from "../decision-log.js";
 
@@ -583,18 +584,20 @@ export async function deployPosition({
   let activeBinsBelow = bins_below ?? config.strategy.binsBelow;
   let activeBinsAbove = bins_above ?? 0;
 
-  if (isPoolOnCooldown(pool_address)) {
-    log("deploy", `Pool ${pool_address.slice(0, 8)} is on cooldown — skipping`);
-    return { success: false, error: "Pool on cooldown — was recently closed with a cooldown reason. Try a different pool." };
-  }
-
   const { StrategyType, getBinIdFromPrice, getPriceOfBinByBinId } = await getDLMM();
   const pool = await getPool(pool_address);
   const baseMint = pool.lbPair.tokenXMint.toString();
+
+  // Pool-memory cooldown checks — whitelist bypass is handled inside these functions
+  if (isPoolOnCooldown(pool_address, baseMint)) {
+    log("deploy", `Pool ${pool_address.slice(0, 8)} is on cooldown — skipping`);
+    return { success: false, error: "Pool on cooldown — was recently closed with a cooldown reason. Try a different pool." };
+  }
   if (isBaseMintOnCooldown(baseMint)) {
     log("deploy", `Base mint ${baseMint.slice(0, 8)} is on cooldown — skipping deploy for pool ${pool_address.slice(0, 8)}`);
     return { success: false, error: "Token on cooldown — recently closed out-of-range too many times. Try a different token." };
   }
+
   const activeBin = await pool.getActiveBin();
   const actualBinStep = pool.lbPair.binStep;
   const activePrice = Number(getPriceOfBinByBinId(activeBin.binId, actualBinStep).toString());

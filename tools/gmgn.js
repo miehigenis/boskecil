@@ -4,6 +4,7 @@ import { config } from "../config.js";
 import { log } from "../logger.js";
 import { fetchChartIndicatorsForMint } from "./chart-indicators.js";
 import { getAdvancedInfo } from "./okx.js";
+import { isWhitelisted } from "../whitelist.js";
 
 // Force IPv4 — GMGN OpenAPI does not support IPv6
 setDefaultResultOrder("ipv4first");
@@ -588,7 +589,15 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
     },
   });
   const ranked = unwrapList(rankPayload, ["rank", "list", "data"]);
-  const s1 = ranked.filter((token) => {
+  // Whitelist tokens bypass S1 rank filter — they go straight to S1.5
+  // Only S1.5+ can reject them. S1 itself (rank/mcap/volume/age/bundler) cannot.
+  const s1Candidates = ranked.filter((token) => {
+    const mint = token.address;
+    if (isWhitelisted(mint)) {
+      // Whitelist token — bypass S1 filter, auto-pass
+      log("gmgn", `S1 whitelist bypass: ${token.symbol || mint}`);
+      return true;
+    }
     const check = passBasicRankFilter(token);
     if (!check.pass) {
       filtered.push({ stage: 1, name: token.symbol || token.address, reason: check.reasons.join(", ") });
@@ -597,8 +606,13 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
     return true;
   }).sort((a, b) => num(b.volume) - num(a.volume))
     .slice(0, Math.max(limit, Number(g.enrichLimit || 20)));
+  // S1 after whitelist bypass
+  const s1 = s1Candidates;
   stageCounts.s1 = s1.length;
-  stagePassing.s1 = s1.map((t) => ({ name: t.symbol || t.address, reason: "passed rank filter" }));
+  stagePassing.s1 = s1.map((t) => ({
+    name: t.symbol || t.address,
+    reason: isWhitelisted(t.address) ? "whitelist (S1 bypassed)" : "passed rank filter",
+  }));
   log("gmgn", `Stage1 rank: ${ranked.length} → ${s1.length} pass`);
 
   // ── Stage 1.5: OKX suspicious_pct filter ──────────────────────────────────

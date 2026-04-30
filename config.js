@@ -101,6 +101,7 @@ export const config = {
     maxVolatility:      u.maxVolatility      ?? 15,
     useVwapFilter:      u.useVwapFilter      ?? false,  // enable/disable VWAP ATH -20% hard filter
     athDropLimit:       u.athDropLimit       ?? -20,     // % below VWAP ATH to hard reject
+    whitelistTtlHours: u.whitelistTtlHours  ?? 6,       // auto-expiry for whitelist entries (hours)
   },
 
   gmgn: {
