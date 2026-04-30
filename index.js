@@ -979,15 +979,10 @@ function buildGmgnFunnelReport(stageCounts, stagePassing = {}, stageRejected = [
 }
 
 function computeBinsBelow(volatility, binStep = null) {
-  // Drawdown coverage: -65% (lo) to -80% (hi) across all bin steps.
-  // bin_step 80:  1 bin = 0.8%  → 81 bins = -65%, 100 bins = -80%
-  // bin_step 100: 1 bin = 1.0%  → 65 bins = -65%, 80 bins = -80%
-  // bin_step 125: 1 bin = 1.25% → 52 bins = -65%, 64 bins = -80%
-  let lo = config.strategy.minBinsBelow;  // fallback: 65
-  let hi = config.strategy.maxBinsBelow;  // fallback: 80
-  if (binStep === 80)  { lo = 81;  hi = 100; }
-  else if (binStep === 100) { lo = 65; hi = 80; }
-  else if (binStep === 125) { lo = 52; hi = 64; }
+  let lo = config.strategy.minBinsBelow;
+  let hi = config.strategy.maxBinsBelow; // fallback
+  if (binStep === 80)  { lo = 131;  hi = 205; }
+  else if (binStep === 100) { lo = 105; hi = 161; }
   return Math.max(lo, Math.min(hi, Math.round(lo + ((Number(volatility) || 0) / 5) * (hi - lo))));
 }
 
