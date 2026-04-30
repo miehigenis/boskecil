@@ -273,7 +273,7 @@ export const config = {
       : ["5_MINUTE"],
     candles: indicatorUserConfig.candles ?? 298,
     rsiOversold: indicatorUserConfig.rsiOversold ?? 30,
-    rsiOverbought: indicatorUserConfig.rsiOverbought ?? 80,
+    rsiOverbought: indicatorUserConfig.rsiOverbought ?? 70,
     requireAllIntervals: indicatorUserConfig.requireAllIntervals ?? false,
   },
 };
