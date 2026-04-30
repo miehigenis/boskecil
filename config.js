@@ -99,6 +99,8 @@ export const config = {
     athFilterPct:       u.athFilterPct       ?? null, // e.g. -20 = only deploy if price is >= 20% below ATH
     minVolatility:      u.minVolatility      ?? 1,
     maxVolatility:      u.maxVolatility      ?? 15,
+    useVwapFilter:      u.useVwapFilter      ?? false,  // enable/disable VWAP ATH -20% hard filter
+    athDropLimit:       u.athDropLimit       ?? -20,     // % below VWAP ATH to hard reject
   },
 
   gmgn: {

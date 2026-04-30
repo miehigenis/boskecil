@@ -467,13 +467,15 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     if (eligible.length < before) log("dev_blocklist", `Filtered ${before - eligible.length} pool(s) via OKX creator check`);
   }
 
-  // ── VWAP Trend Screening (hard rule) ─────────────────────────────
-  // Rule: price must be within -20% of VWAP ATH (hasn't pumped too far).
+  // ── VWAP Trend Screening (configurable hard rule) ───────────────────
+  // Rule: price must be within athDropLimit % of VWAP ATH (hasn't pumped too far).
+  // Enabled only when config.screening.useVwapFilter === true.
   // Slope requirement REMOVED — slope is volatile on 5m and causes false rejects.
   // Insufficient data = skip (pass). onchainos error = skip (pass).
   // Based on 5m candles from onchainos, computed locally.
-  const ATH_DROP_LIMIT = -20; // % below VWAP ATH → hard reject
-  if (eligible.length > 0) {
+  const vwapEnabled = config.screening.useVwapFilter === true;
+  const ATH_DROP_LIMIT = config.screening.athDropLimit ?? -20;
+  if (vwapEnabled && eligible.length > 0) {
     const vwapCheck = await Promise.all(
       eligible.map(async (pool) => {
         try {
