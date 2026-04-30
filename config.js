@@ -222,6 +222,7 @@ export const config = {
   // ─── Darwinian Signal Weighting ───────
   darwin: {
     enabled:        u.darwinEnabled     ?? false,
+    autoEvolve:     u.autoEvolve       ?? true,  // auto-evolve thresholds every 5 closes
     windowDays:     u.darwinWindowDays  ?? 60,
     recalcEvery:    u.darwinRecalcEvery ?? 5,    // recalc every N closes
     boostFactor:    u.darwinBoost       ?? 1.05,
