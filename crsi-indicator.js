@@ -155,6 +155,12 @@ function computeBands(crsiHistory, leveling = DEFAULT_LEVELING) {
 
   const lmin = Math.min(...valid);
   const lmax = Math.max(...valid);
+
+  // Edge case: if lmin === lmax (single-valued history), use fixed extremes
+  if (lmin === lmax) {
+    return { db: 25, ub: 75 };
+  }
+
   const mstep = (lmax - lmin) / 100;
   const aperc = leveling / 100;
   const cyclicmemory = valid.length;
