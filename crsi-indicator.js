@@ -250,6 +250,27 @@ export function getCRSI(mint, closes, { domCycle = DEFAULT_DOM_CYCLE, vibration 
   // Compute bands from full history
   const { db, ub } = computeBands(fullHistory, leveling);
 
+  // Fallback: if not enough history for cRSI bands, seed from RSI
+  const MIN_HISTORY_FOR_CRSI_BANDS = 10;
+  if (db === null || ub === null || fullHistory.length < MIN_HISTORY_FOR_CRSI_BANDS) {
+    // Seed bands from RSI(2) so entry can still trigger while cRSI warms up
+    const rsiSeed = computeWilderRSI(closes.slice(-50), Math.ceil(domCycle / 2));
+    if (rsiSeed !== null) {
+      const seedDb = rsiSeed * 0.7;  // approximate oversold
+      const seedUb = rsiSeed * 1.3; // approximate overbought
+      return {
+        crsi,
+        db: db ?? seedDb,
+        ub: ub ?? seedUb,
+        state: {
+          historyLength: fullHistory.length,
+          lastUpdate: newState.lastUpdate,
+          seededFromRsi: true,
+        },
+      };
+    }
+  }
+
   return {
     crsi,
     db,
