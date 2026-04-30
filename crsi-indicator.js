@@ -22,7 +22,7 @@ const DEFAULT_VIBRATION = 10;
 const DEFAULT_LEVELING = 10.0; // percentile for bands (10 = bottom/top 10%)
 
 // ── In-memory state ──────────────────────────────────────────────────────────
-// Map<mint, { crsiHistory: number[], lastUpdate: number }>
+// Map<mint, { rsiHistory: number[], crsiHistory: number[], lastUpdate: number }>
 const stateCache = new Map();
 
 function loadBuffer() {
@@ -32,7 +32,7 @@ function loadBuffer() {
       if (raw && typeof raw === "object") {
         for (const [mint, entry] of Object.entries(raw)) {
           if (entry && Array.isArray(entry.crsiHistory)) {
-            stateCache.set(mint, entry);
+            stateCache.set(mint, { crsiHistory: entry.crsiHistory, lastUpdate: entry.lastUpdate || 0 });
           }
         }
       }
@@ -50,21 +50,20 @@ function saveBuffer() {
 // Load on first import
 loadBuffer();
 
-// ── Core cRSI computation ────────────────────────────────────────────────────
+// ── Core computations ──────────────────────────────────────────────────────
 
 /**
  * Compute Wilder RSI from close prices.
- * @param {number[]} closes
- * @param {number} period
- * @returns {number|null}
+ * Returns RSI series (one value per close).
  */
-function computeWilderRSI(closes, period) {
-  if (!Array.isArray(closes) || closes.length < period + 1) return null;
+function computeWilderRSISeries(closes, period) {
+  if (!Array.isArray(closes) || closes.length < period + 1) return [];
+  const rsiSeries = new Array(closes.length).fill(null);
 
   let avgGain = 0;
   let avgLoss = 0;
 
-  // First average: simple mean of first period changes
+  // First average: simple mean
   for (let i = 1; i <= period; i++) {
     const change = closes[i] - closes[i - 1];
     if (change > 0) avgGain += change;
@@ -73,8 +72,10 @@ function computeWilderRSI(closes, period) {
   avgGain /= period;
   avgLoss /= period;
 
-  // Subsequent: smoothed (Wilder smoothing)
-  for (let i = period + 1; i < closes.length; i++) {
+  for (let i = period; i < closes.length; i++) {
+    const rsi = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+    rsiSeries[i] = rsi;
+
     const change = closes[i] - closes[i - 1];
     const gain = change > 0 ? change : 0;
     const loss = change < 0 ? Math.abs(change) : 0;
@@ -82,73 +83,64 @@ function computeWilderRSI(closes, period) {
     avgLoss = (avgLoss * (period - 1) + loss) / period;
   }
 
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - 100 / (1 + rs);
+  return rsiSeries;
 }
 
 /**
- * Compute cRSI (cyclic RSI) from close prices and previous crsi state.
+ * Compute cRSI (cyclic RSI) series from RSI series and previous cRSI state.
  *
- * Pine Script formula:
- *   torque      = 2.0 / (vibration + 1)
- *   phasingLag  = (vibration - 1) / 2.0
- *   up          = rma(max(change(src), 0), cyclelen)
- *   down        = rma(-min(change(src), 0), cyclelen)
- *   rsi         = down == 0 ? 100 : up == 0 ? 0 : 100 - 100 / (1 + up/down)
- *   crsi        = torque * (2*rsi - rsi[phasingLag]) + (1-torque) * nz(crsi[1])
+ * Pine Script formula (applied per bar):
+ *   crsi := torque * (2*rsi - rsi[phasingLag]) + (1-torque) * nz(crsi[1])
  *
- * @param {number[]} closes  - all close prices (oldest → newest)
- * @param {number[]} prevCrsiHistory - previous crsi values (index 0 = oldest)
- * @param {number} domCycle   - dominant cycle length (default 20)
- * @param {number} vibration  - vibration constant (default 10)
- * @returns {{ crsi: number, crsiHistory: number[] }}
+ * This is applied bar-by-bar. crsi[1] means the previous bar's crsi value.
+ * We simulate this sequentially: prev_crsi becomes the carry-over state.
+ *
+ * @param {number[]} rsiSeries - RSI values (one per close, nulls where insufficient data)
+ * @param {number[]} prevCrsiHistory - previous cRSI values (oldest first)
+ * @param {number} domCycle - dominant cycle (default 20)
+ * @param {number} vibration - vibration constant (default 10)
+ * @returns {{ crsiSeries: number[], newCrsiHistory: number[] }}
  */
-function computeCRSI(closes, prevCrsiHistory, domCycle = DEFAULT_DOM_CYCLE, vibration = DEFAULT_VIBRATION) {
-  const cyclelen = Math.floor(domCycle / 2); // 10
-  const torque = 2.0 / (vibration + 1);       // 2/11 ≈ 0.1818
-  const phasingLag = Math.floor((vibration - 1) / 2); // floor(4.5) = 4
+function computeCRSISeries(rsiSeries, prevCrsiHistory, domCycle = DEFAULT_DOM_CYCLE, vibration = DEFAULT_VIBRATION) {
+  const torque = 2.0 / (vibration + 1);      // 0.1818
+  const phasingLag = Math.floor((vibration - 1) / 2); // 4
 
-  // Build extended close array: prevCrsiHistory followed by current closes
-  // prevCrsiHistory[0] = oldest, prevCrsiHistory[last] = most recent before current
-  const extendedCloses = [...prevCrsiHistory.map(c => c), ...closes];
+  // We need prevCrsiHistory[-1] (most recent previous cRSI) as carry-in
+  const prevLast = prevCrsiHistory.length > 0 ? prevCrsiHistory[prevCrsiHistory.length - 1] : null;
 
-  // We need at least (prevCrsiHistory.length + 1 + cyclelen + phasingLag) closes
-  // to compute current crsi. We compute crsi for each close in `closes`.
-  const newHistory = [];
+  const crsiSeries = [];
+  let carry = prevLast;
 
-  for (let i = prevCrsiHistory.length; i < extendedCloses.length; i++) {
-    const slice = extendedCloses.slice(Math.max(0, i - cyclelen), i + 1);
-    const rsi = computeWilderRSI(slice, cyclelen);
-    if (rsi === null) {
-      newHistory.push(null);
+  for (let i = 0; i < rsiSeries.length; i++) {
+    const rsi = rsiSeries[i];
+    if (rsi === null || rsi === undefined) {
+      crsiSeries.push(null);
       continue;
     }
 
-    // rsi[phasingLag] — crsi value `phasingLag` bars ago
+    // rsi[phasingLag] in Pine Script means `phasingLag` bars back in the RSI series
     const lagIndex = i - phasingLag;
-    const rsiLag = lagIndex >= 0 ? extendedCloses[lagIndex] : rsi; // fallback to current if out of range
-
-    // crsi[1] — previous crsi value
-    const prevCrsi = newHistory.length > 0 ? newHistory[newHistory.length - 1] : null;
+    const rsiLag = lagIndex >= 0 && rsiSeries[lagIndex] !== null
+      ? rsiSeries[lagIndex]
+      : rsi; // fallback to current if not available
 
     let crsi;
-    if (prevCrsi === null) {
-      // First cRSI — no previous state, use raw RSI
+    if (carry === null) {
+      // No previous cRSI — first valid value is just RSI
       crsi = rsi;
     } else {
-      crsi = torque * (2 * rsi - rsiLag) + (1 - torque) * prevCrsi;
+      crsi = torque * (2 * rsi - rsiLag) + (1 - torque) * carry;
     }
 
-    newHistory.push(crsi);
+    crsiSeries.push(crsi);
+    carry = crsi;
   }
 
-  // Return last crsi and full history
-  const finalCrsi = newHistory.length > 0 ? newHistory[newHistory.length - 1] : null;
-  return {
-    crsi: finalCrsi,
-    crsiHistory: newHistory.filter(v => v !== null),
-  };
+  // Filter valid and combine with prev history
+  const newCrsiValues = crsiSeries.filter(v => v !== null);
+  const fullHistory = [...prevCrsiHistory, ...newCrsiValues].slice(-(domCycle * 2));
+
+  return { crsiSeries, newCrsiHistory: fullHistory };
 }
 
 /**
@@ -156,17 +148,8 @@ function computeCRSI(closes, prevCrsiHistory, domCycle = DEFAULT_DOM_CYCLE, vibr
  *
  * Pine Script sweeps 100 steps from min→max, finds level where
  * `leveling%` (10%) of crsi values fall below/above that level.
- *
- * @param {number[]} crsiHistory
- * @param {number} leveling - percentile (default 10)
- * @returns {{ db: number|null, ub: number|null }}
  */
 function computeBands(crsiHistory, leveling = DEFAULT_LEVELING) {
-  if (!Array.isArray(crsiHistory) || crsiHistory.length < 2) {
-    return { db: null, ub: null };
-  }
-
-  // Filter valid numbers
   const valid = crsiHistory.filter(v => v !== null && Number.isFinite(v));
   if (valid.length < 2) return { db: null, ub: null };
 
@@ -184,11 +167,7 @@ function computeBands(crsiHistory, leveling = DEFAULT_LEVELING) {
     for (let m = 0; m < cyclicmemory; m++) {
       if (valid[m] < testvalue) below++;
     }
-    const ratio = below / cyclicmemory;
-    if (ratio >= aperc) {
-      db = testvalue;
-      break outer;
-    }
+    if (below / cyclicmemory >= aperc) { db = testvalue; break outer; }
   }
 
   // Upper band (ub) — sweep from lmax downward
@@ -199,23 +178,19 @@ function computeBands(crsiHistory, leveling = DEFAULT_LEVELING) {
     for (let m = 0; m < cyclicmemory; m++) {
       if (valid[m] >= testvalue) above++;
     }
-    const ratio = above / cyclicmemory;
-    if (ratio >= aperc) {
-      ub = testvalue;
-      break outer2;
-    }
+    if (above / cyclicmemory >= aperc) { ub = testvalue; break outer2; }
   }
 
   return { db, ub };
 }
 
-// ── Public API ──────────────────────────────────────────────────────────────
+// ── Public API ─────────────────────────────────────────────────────────────
 
 /**
  * Get cRSI indicators for a mint.
  *
  * @param {string} mint - token mint address
- * @param {number[]} closes - latest close prices (from candles)
+ * @param {number[]} closes - latest close prices (from candles, oldest → newest)
  * @param {object} opts
  * @param {number} opts.domCycle - dominant cycle length (default 20)
  * @param {number} opts.vibration - vibration constant (default 10)
@@ -227,48 +202,63 @@ export function getCRSI(mint, closes, { domCycle = DEFAULT_DOM_CYCLE, vibration 
     return { crsi: null, db: null, ub: null, state: null };
   }
 
-  const state = stateCache.get(mint) || { crsiHistory: [], lastUpdate: 0 };
-  const cyclicmemory = domCycle * 2;
+  const state = stateCache.get(mint) || { rsiHistory: [], crsiHistory: [], lastUpdate: 0 };
+  const cyclelen = Math.floor(domCycle / 2); // 10
 
-  // Build extended history: previous crsi values + new closes
-  // We need enough closes to compute 1 new crsi
-  const minRequired = Math.max(1, Math.ceil(domCycle / 2) + Math.floor((vibration - 1) / 2) + 1);
-  const extendedCloses = [...state.crsiHistory.slice(-(cyclicmemory * 2)).map(c => c), ...closes];
+  // How many historical closes we need for continuity:
+  // RSI needs (cyclelen + 1) closes to warm up
+  // cRSI needs prevCrsiHistory for the carry-over
+  // We extend closes by prepending from state.rsiHistory (which tracks RSI, not prices)
+  // to get smooth RSI continuity.
+  //
+  // state.rsiHistory = RSI values from previous calls (oldest → newest)
+  // Warm-up: we need cyclelen+period closes to get first valid RSI.
+  // To support cRSI carry-over across calls, we keep previous cRSI state.
+  // RSI is recomputed fresh each call (state carries in crsiHistory, not rsiHistory).
 
-  const { crsi, crsiHistory: newCrsiValues } = computeCRSI(closes, state.crsiHistory, domCycle, vibration);
+  const lookback = cyclelen + Math.floor((vibration - 1) / 2); // 10 + 4 = 14
 
-  // Combine old history with new values (keep last cyclicmemory)
-  const fullHistory = [...state.crsiHistory, ...newCrsiValues].slice(-cyclicmemory);
+  // Fresh RSI series from current closes
+  const freshRsiSeries = computeWilderRSISeries(closes, cyclelen);
 
-  // Update state
+  // Carry-over: previous cRSI values from state
+  const prevCrsiHistory = state.crsiHistory.slice(-(domCycle * 2));
+
+  // Compute cRSI series with carry-over from previous state
+  const { crsiSeries, newCrsiHistory } = computeCRSISeries(
+    freshRsiSeries,
+    prevCrsiHistory,
+    domCycle,
+    vibration
+  );
+
+  // Update state: carry forward cRSI history
   const newState = {
-    crsiHistory: fullHistory,
+    crsiHistory: newCrsiHistory,
     lastUpdate: Date.now(),
   };
   stateCache.set(mint, newState);
 
-  // Compute bands from full history
-  const { db, ub } = computeBands(fullHistory, leveling);
+  // Current cRSI = last valid value
+  const crsi = crsiSeries.length > 0 ? crsiSeries[crsiSeries.length - 1] : null;
 
-  // Fallback: if not enough history for cRSI bands, seed from RSI
+  // Compute bands
+  const { db, ub } = computeBands(newCrsiHistory, leveling);
+
+  // Fallback: if bands unreliable (insufficient history), seed from RSI extremes
   const MIN_HISTORY_FOR_CRSI_BANDS = 10;
-  if (db === null || ub === null || fullHistory.length < MIN_HISTORY_FOR_CRSI_BANDS) {
-    // Seed bands from RSI(2) so entry can still trigger while cRSI warms up
-    const rsiSeed = computeWilderRSI(closes.slice(-50), Math.ceil(domCycle / 2));
-    if (rsiSeed !== null) {
-      const seedDb = rsiSeed * 0.7;  // approximate oversold
-      const seedUb = rsiSeed * 1.3; // approximate overbought
-      return {
-        crsi,
-        db: db ?? seedDb,
-        ub: ub ?? seedUb,
-        state: {
-          historyLength: fullHistory.length,
-          lastUpdate: newState.lastUpdate,
-          seededFromRsi: true,
-        },
-      };
-    }
+  const crsiHistory = newCrsiHistory;
+  if (crsiHistory.length < MIN_HISTORY_FOR_CRSI_BANDS && crsi !== null) {
+    return {
+      crsi,
+      db: 25,   // fixed oversold approximation
+      ub: 75,   // fixed overbought approximation
+      state: {
+        historyLength: crsiHistory.length,
+        lastUpdate: newState.lastUpdate,
+        seededFromRsi: true,
+      },
+    };
   }
 
   return {
@@ -276,7 +266,7 @@ export function getCRSI(mint, closes, { domCycle = DEFAULT_DOM_CYCLE, vibration 
     db,
     ub,
     state: {
-      historyLength: fullHistory.length,
+      historyLength: newCrsiHistory.length,
       lastUpdate: newState.lastUpdate,
     },
   };
@@ -284,7 +274,6 @@ export function getCRSI(mint, closes, { domCycle = DEFAULT_DOM_CYCLE, vibration 
 
 /**
  * Clear crsi buffer for a mint (e.g., after position closed).
- * @param {string} mint
  */
 export function clearCRSIBuffer(mint) {
   stateCache.delete(mint);
@@ -299,13 +288,12 @@ export function persistCRSIBuffer() {
 
 /**
  * Get all buffered mints (for debugging/admin).
- * @returns {object}
  */
 export function getCRSIBufferStatus() {
   const entries = {};
   for (const [mint, entry] of stateCache.entries()) {
     entries[mint] = {
-      historyLength: entry.crsiHistory.length,
+      crsiHistoryLength: entry.crsiHistory?.length || 0,
       lastUpdate: entry.lastUpdate,
     };
   }
@@ -313,15 +301,18 @@ export function getCRSIBufferStatus() {
 }
 
 /**
- * Warm up buffer for a mint by prepending closes.
- * Called when resuming tracking for a mint with existing position.
+ * Warm up buffer for a mint with historical closes (call before resuming).
  * @param {string} mint
- * @param {number[]} historicalCloses - older closes to prepend
+ * @param {number[]} historicalCloses - older closes (oldest → newest)
  */
 export function warmupCRSIBuffer(mint, historicalCloses) {
   if (!Array.isArray(historicalCloses) || historicalCloses.length === 0) return;
+  const domCycle = DEFAULT_DOM_CYCLE;
+  const cyclelen = Math.floor(domCycle / 2);
+  const rsiSeries = computeWilderRSISeries(historicalCloses, cyclelen);
   const state = stateCache.get(mint) || { crsiHistory: [], lastUpdate: 0 };
-  // Prepend historical closes (oldest first)
-  state.crsiHistory = [...historicalCloses, ...state.crsiHistory].slice(-(DEFAULT_DOM_CYCLE * 2 * 2));
+  const { crsiSeries } = computeCRSISeries(rsiSeries, state.crsiHistory, domCycle, DEFAULT_VIBRATION);
+  state.crsiHistory = crsiSeries.filter(v => v !== null).slice(-(domCycle * 2));
+  state.lastUpdate = Date.now();
   stateCache.set(mint, state);
 }
