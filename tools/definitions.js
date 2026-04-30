@@ -382,7 +382,7 @@ Management: minClaimAmount, outOfRangeBinsToClose, outOfRangeWaitMinutes, oorCoo
 Risk: maxPositions, maxDeployAmount
 Schedule: managementIntervalMin, screeningIntervalMin
 Models: managementModel, screeningModel, generalModel
-Strategy: strategy, minBinsBelow, maxBinsBelow
+Strategy: strategy, minBinsBelow, maxBinsBelow, domCycle, vibration, leveling, entryPreset, exitPreset, rsiOverbought, rsiOversold
 
 Reason is optional but helpful — logged as a lesson when provided.`,
       parameters: {

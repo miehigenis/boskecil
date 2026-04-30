@@ -1,17 +1,24 @@
+/**
+ * chart-indicators.js — Local indicator computation
+ *
+ * All indicators computed locally from candles fetched via onchainos CLI.
+ * NO external API calls to agentmeridian.xyz.
+ *
+ * Indicators: RSI, Bollinger Bands, Supertrend, VWAP
+ * Entry presets: rsi_extreme, rsi_reversal, bb_plus_rsi, crsi_extreme, etc.
+ */
+
 import { config } from "../config.js";
 import { log } from "../logger.js";
 import { spawnSync } from "child_process";
+import { getCRSI, persistCRSIBuffer } from "../crsi-indicator.js";
 
 const DEFAULT_INTERVALS = ["5_MINUTE"];
 const DEFAULT_CANDLES = 298;
 const CLI = "/home/ubuntu/.local/bin/onchainos";
 
-function safeNum(value) {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
+// ── Candle Fetcher (onchainos CLI — already local) ─────────────────────────
 
-// ── OHLCV candle fetcher via onchainos CLI ──────────────────────
 export function fetchCandles(mint, bar = "5m", limit = 299) {
   try {
     const raw = spawnSync(CLI, [
@@ -35,7 +42,115 @@ export function fetchCandles(mint, bar = "5m", limit = 299) {
   } catch { return []; }
 }
 
-// ── VWAP Calculations ────────────────────────────────────────────
+// ── Local Indicator Computations ─────────────────────────────────────────────
+
+function safeNum(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Wilder RSI — same as Pine Script's rma() based RSI */
+function computeRSI(closes, period = 2) {
+  if (!Array.isArray(closes) || closes.length < period + 1) return null;
+  let avgGain = 0;
+  let avgLoss = 0;
+  for (let i = 1; i <= period; i++) {
+    const change = closes[i] - closes[i - 1];
+    if (change > 0) avgGain += change;
+    else avgLoss += Math.abs(change);
+  }
+  avgGain /= period;
+  avgLoss /= period;
+  for (let i = period + 1; i < closes.length; i++) {
+    const change = closes[i] - closes[i - 1];
+    const gain = change > 0 ? change : 0;
+    const loss = change < 0 ? Math.abs(change) : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+  }
+  if (avgLoss === 0) return 100;
+  return 100 - 100 / (1 + avgGain / avgLoss);
+}
+
+/** Bollinger Bands — SMA middle, stddev outer */
+function computeBollingerBands(closes, period = 20, mult = 2.0) {
+  if (!Array.isArray(closes) || closes.length < period) return null;
+  const slice = closes.slice(-period);
+  const sma = slice.reduce((a, b) => a + b, 0) / period;
+  const variance = slice.reduce((sum, v) => sum + Math.pow(v - sma, 2), 0) / period;
+  const stddev = Math.sqrt(variance);
+  return {
+    upper: sma + mult * stddev,
+    middle: sma,
+    lower: sma - mult * stddev,
+  };
+}
+
+/** Supertrend — atr-based trend following indicator */
+function computeSupertrend(highs, lows, closes, period = 10, multiplier = 3.0) {
+  if (!Array.isArray(highs) || !Array.isArray(lows) || !Array.isArray(closes)) return null;
+  if (highs.length < period || highs.length !== lows.length || highs.length !== closes.length) return null;
+
+  const atr = computeATR(highs, lows, closes, period);
+  if (atr === null) return null;
+
+  const hl2 = closes.map((c, i) => (highs[i] + lows[i]) / 2);
+  const upperBand = hl2.map((v, i) => v + multiplier * atr);
+  const lowerBand = hl2.map((v, i) => v - multiplier * atr);
+
+  let direction = 1; // 1 = bullish, -1 = bearish
+  let supertrendValue = lowerBand[lowerBand.length - 1];
+  let breakUp = false;
+  let breakDown = false;
+
+  for (let i = 1; i < closes.length; i++) {
+    const prevST = supertrendValue;
+    const prevDir = direction;
+
+    if (closes[i] > upperBand[i - 1]) {
+      direction = 1;
+      supertrendValue = lowerBand[i];
+    } else if (closes[i] < lowerBand[i - 1]) {
+      direction = -1;
+      supertrendValue = upperBand[i];
+    } else {
+      supertrendValue = direction === 1 ? lowerBand[i] : upperBand[i];
+    }
+
+    if (direction === 1 && prevDir === -1) breakUp = true;
+    if (direction === -1 && prevDir === 1) breakDown = true;
+  }
+
+  return {
+    value: supertrendValue,
+    direction: direction === 1 ? "bullish" : "bearish",
+    breakUp,
+    breakDown,
+  };
+}
+
+/** Average True Range */
+function computeATR(highs, lows, closes, period = 14) {
+  if (!Array.isArray(highs) || highs.length < period + 1) return null;
+  const trs = [];
+  for (let i = 1; i < highs.length; i++) {
+    const tr = Math.max(
+      highs[i] - lows[i],
+      Math.abs(highs[i] - closes[i - 1]),
+      Math.abs(lows[i] - closes[i - 1])
+    );
+    trs.push(tr);
+  }
+  if (trs.length < period) return null;
+  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < trs.length; i++) {
+    atr = (atr * (period - 1) + trs[i]) / period;
+  }
+  return atr;
+}
+
+// ── VWAP Calculations ───────────────────────────────────────────────────────
+
 function calcVWAP(candles) {
   if (!Array.isArray(candles) || candles.length === 0) return null;
   let cumulativeTPV = 0;
@@ -78,7 +193,7 @@ export function calculateVWAPSlope(candles, period = 20) {
     return { slope: 0, rising: null, vwap_current: vwapCurrent, vwap_prior: vwapPrior, insufficient_data: true, vwapAth: null, distanceFromAthPct: null };
   }
   const slope  = (vwapCurrent - vwapPrior) / vwapPrior;
-  const rising = slope > 0.005; // require >0.5% to call it rising
+  const rising = slope > 0.005;
   const vwapAth = findVwapATH(candles, 100);
   let distanceFromAthPct = null;
   if (vwapAth != null && vwapAth > 0 && vwapCurrent > 0) {
@@ -110,15 +225,76 @@ export function getVwapIndicators(mint) {
   };
 }
 
-function getApiBase() {
-  return String(config.api.url || "https://api.agentmeridian.xyz/api").replace(/\/+$/, "");
+// ── Local chart indicators for a mint ───────────────────────────────────────
+
+/**
+ * Compute all chart indicators locally for a mint.
+ * Replaces the external API call to agentmeridian.xyz.
+ *
+ * @param {string} mint
+ * @param {object} opts
+ * @param {string} opts.interval - "5_MINUTE" or "15_MINUTE"
+ * @param {number} opts.candles - number of candles to fetch
+ * @param {number} opts.rsiLength - RSI period
+ * @param {boolean} opts.refresh - force refresh (always false for local, existing data kept in cRSI buffer)
+ */
+export function computeChartIndicatorsLocal(mint, {
+  interval = "5_MINUTE",
+  candles = 298,
+  rsiLength = 2,
+  domCycle = 20,
+  vibration = 10,
+  leveling = 10,
+} = {}) {
+  const bar = interval === "15_MINUTE" ? "15m" : "5m";
+  const allCandles = fetchCandles(mint, bar, candles + 40); // extra for lookback
+  if (allCandles.length < candles) {
+    return { insufficient_data: true, latest: null };
+  }
+
+  // Use most recent `candles` candles
+  const recent = allCandles.slice(-candles);
+  const previous = allCandles.slice(-candles - 1, -1);
+
+  const closes = recent.map(c => c.close);
+  const highs  = recent.map(c => c.high);
+  const lows   = recent.map(c => c.low);
+  const prevCloses = previous.map(c => c.close);
+
+  const latestClose = closes[closes.length - 1];
+  const prevClose = prevCloses[prevCloses.length - 1];
+
+  // RSI
+  const rsi = computeRSI(closes, rsiLength);
+
+  // Bollinger
+  const bb = computeBollingerBands(closes, 20, 2.0);
+
+  // Supertrend
+  const st = computeSupertrend(highs, lows, closes, 10, 3.0);
+
+  // cRSI
+  const crsiResult = getCRSI(mint, closes, { domCycle, vibration, leveling });
+  const { crsi, db, ub } = crsiResult;
+
+  return {
+    insufficient_data: false,
+    latest: {
+      candle: { close: latestClose },
+      previousCandle: { close: prevClose },
+      rsi: { value: rsi },
+      bollinger: bb ? { upper: bb.upper, middle: bb.middle, lower: bb.lower } : {},
+      supertrend: st || {},
+      states: st ? {
+        supertrendBreakUp: st.breakUp,
+        supertrendBreakDown: st.breakDown,
+      } : {},
+      crsi: { value: crsi, db, ub },
+    },
+  };
 }
 
-function getHeaders() {
-  const headers = {};
-  if (config.api.publicApiKey) headers["x-api-key"] = config.api.publicApiKey;
-  return headers;
-}
+// ── Preset Evaluation ────────────────────────────────────────────────────────
 
 function normalizeIntervals(intervals) {
   const list = Array.isArray(intervals) ? intervals : DEFAULT_INTERVALS;
@@ -134,11 +310,15 @@ function buildSignalSummary(payload) {
   const rsi = safeNum(latest?.rsi?.value);
   const bollinger = latest?.bollinger || {};
   const supertrend = latest?.supertrend || {};
+  const crsiData = latest?.crsi || {};
   const fibonacciLevels = latest?.fibonacci?.levels || {};
   return {
     close: safeNum(candle.close),
     previousClose: safeNum(previousCandle.close),
     rsi,
+    crsi: safeNum(crsiData.value),
+    crsiDb: safeNum(crsiData.db),
+    crsiUb: safeNum(crsiData.ub),
     lowerBand: safeNum(bollinger.lower),
     middleBand: safeNum(bollinger.middle),
     upperBand: safeNum(bollinger.upper),
@@ -152,15 +332,18 @@ function buildSignalSummary(payload) {
   };
 }
 
-function evaluatePreset(side, preset, payload) {
+function evaluatePreset(side, preset, payload, opts = {}) {
   const summary = buildSignalSummary(payload);
-  const oversold = Number(config.indicators.rsiOversold ?? 30);
-  const overbought = Number(config.indicators.rsiOverbought ?? 80);
+  const oversold = Number(opts.rsiOversold ?? 30);
+  const overbought = Number(opts.rsiOverbought ?? 70);
   const close = summary.close;
   const previousClose = summary.previousClose;
   const lowerBand = summary.lowerBand;
   const upperBand = summary.upperBand;
   const rsi = summary.rsi;
+  const crsi = summary.crsi;
+  const crsiDb = summary.crsiDb;
+  const crsiUb = summary.crsiUb;
   const isBullish = summary.supertrendDirection === "bullish";
   const isBearish = summary.supertrendDirection === "bearish";
   const crossedUp = (level) =>
@@ -213,6 +396,24 @@ function evaluatePreset(side, preset, payload) {
         : {
             confirmed: rsi != null && rsi >= overbought,
             reason: `RSI ${rsi ?? "n/a"} >= overbought ${overbought}`,
+            signal: summary,
+          };
+    case "crsi_extreme":
+      return side === "entry"
+        ? {
+            confirmed: crsi != null && crsiDb != null && crsiUb != null && (crsi <= crsiDb || crsi >= crsiUb),
+            reason: crsi <= crsiDb
+              ? `cRSI ${crsi?.toFixed(2)} <= lower band ${crsiDb?.toFixed(2)} (oversold)`
+              : crsi >= crsiUb
+              ? `cRSI ${crsi?.toFixed(2)} >= upper band ${crsiUb?.toFixed(2)} (overbought)`
+              : `cRSI ${crsi?.toFixed(2)} in band range`,
+            signal: summary,
+          }
+        : {
+            confirmed: crsi != null && crsiUb != null && crsi >= crsiUb,
+            reason: crsi != null && crsiUb != null
+              ? `cRSI ${crsi.toFixed(2)} >= upper band ${crsiUb.toFixed(2)}`
+              : `cRSI ${crsi ?? "n/a"} no exit signal`,
             signal: summary,
           };
     case "bollinger_reversion":
@@ -326,37 +527,21 @@ function evaluatePreset(side, preset, payload) {
   }
 }
 
-export async function fetchChartIndicatorsForMint(
-  mint,
-  {
-    interval,
-    candles = config.indicators.candles ?? DEFAULT_CANDLES,
-    rsiLength = config.indicators.rsiLength ?? 2,
-    refresh = false,
-  } = {},
-) {
-  const normalizedInterval = String(interval || "15_MINUTE").trim().toUpperCase();
-  const search = new URLSearchParams({
-    interval: normalizedInterval,
-    candles: String(candles),
-    rsiLength: String(rsiLength),
-  });
-  if (refresh) search.set("refresh", "1");
+// ── Public API (same interface as before, but now local) ────────────────────
 
-  const res = await fetch(`${getApiBase()}/chart-indicators/${mint}?${search.toString()}`, {
-    headers: getHeaders(),
-  });
-  const text = await res.text().catch(() => "");
-  let payload = {};
-  try {
-    payload = text ? JSON.parse(text) : {};
-  } catch {
-    payload = { raw: text };
-  }
-  if (!res.ok) {
-    throw new Error(payload?.error || `chart indicators ${res.status}`);
-  }
-  return payload;
+/**
+ * Alias for backwards compatibility — now uses local computation.
+ * @deprecated Use computeChartIndicatorsLocal directly
+ */
+export async function fetchChartIndicatorsForMint(mint, opts = {}) {
+  const interval = opts.interval || "5_MINUTE";
+  const candles = opts.candles || 298;
+  const rsiLength = opts.rsiLength || 2;
+  const domCycle = opts.domCycle || config.indicators?.domCycle || 20;
+  const vibration = opts.vibration || config.indicators?.vibration || 10;
+  const leveling = opts.leveling || config.indicators?.leveling || 10;
+
+  return computeChartIndicatorsLocal(mint, { interval, candles, rsiLength, domCycle, vibration, leveling });
 }
 
 export async function confirmIndicatorPreset({
@@ -375,11 +560,28 @@ export async function confirmIndicatorPreset({
     return { enabled: false, confirmed: true, reason: "No indicator intervals configured", intervals: [] };
   }
 
+  const rsiOversold = config.indicators.rsiOversold ?? 29;
+  const rsiOverbought = config.indicators.rsiOverbought ?? 70;
+  const domCycle = config.indicators.domCycle ?? 20;
+  const vibration = config.indicators.vibration ?? 10;
+  const leveling = config.indicators.leveling ?? 10;
+  const candles = config.indicators.candles ?? 298;
+  const rsiLength = config.indicators.rsiLength ?? 2;
+
+  const opts = { rsiOversold, rsiOverbought, domCycle, vibration, leveling };
+
   const results = [];
   for (const interval of targets) {
     try {
-      const payload = await fetchChartIndicatorsForMint(mint, { interval, refresh });
-      const evaluation = evaluatePreset(side, preset, payload);
+      const payload = computeChartIndicatorsLocal(mint, {
+        interval,
+        candles,
+        rsiLength,
+        domCycle,
+        vibration,
+        leveling,
+      });
+      const evaluation = evaluatePreset(side, preset, payload, opts);
       results.push({
         interval,
         ok: true,
@@ -389,7 +591,7 @@ export async function confirmIndicatorPreset({
         latest: payload?.latest || null,
       });
     } catch (error) {
-      log("indicators_warn", `Indicator fetch failed for ${mint.slice(0, 8)} ${interval}: ${error.message}`);
+      log("indicators_warn", `Indicator compute failed for ${mint.slice(0, 8)} ${interval}: ${error.message}`);
       results.push({
         interval,
         ok: false,
@@ -409,7 +611,7 @@ export async function confirmIndicatorPreset({
       skipped: true,
       preset,
       side,
-      reason: "Indicator API unavailable; falling back to existing logic",
+      reason: "Indicator computation failed; proceeding optimistically",
       intervals: results,
     };
   }

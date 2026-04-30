@@ -275,6 +275,10 @@ export const config = {
     rsiOversold: indicatorUserConfig.rsiOversold ?? 30,
     rsiOverbought: indicatorUserConfig.rsiOverbought ?? 70,
     requireAllIntervals: indicatorUserConfig.requireAllIntervals ?? false,
+    // cRSI (cyclic RSI) params
+    domCycle: indicatorUserConfig.domCycle ?? 20,
+    vibration: indicatorUserConfig.vibration ?? 10,
+    leveling: indicatorUserConfig.leveling ?? 10,
   },
 };
 
