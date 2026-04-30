@@ -81,7 +81,7 @@ export const config = {
     minMcap:           u.minMcap           ?? 150_000,
     maxMcap:           u.maxMcap           ?? 10_000_000,
     minBinStep:        u.minBinStep        ?? 80,
-    maxBinStep:        u.maxBinStep        ?? 100,
+    maxBinStep:        u.maxBinStep        ?? 125,
     timeframe:         u.timeframe         ?? "5m",
     category:          u.category          ?? "trending",
     minTokenFeesSol:   u.minTokenFeesSol   ?? 15,  // global fees paid (priority+jito tips). below = bundled/scam
@@ -197,8 +197,8 @@ export const config = {
   // ─── Strategy Mapping ───────────────────
   strategy: {
     strategy:     u.strategy     ?? "bid_ask",
-    minBinsBelow: u.minBinsBelow ?? 69,
-    maxBinsBelow: u.maxBinsBelow ?? 174,
+    minBinsBelow: u.minBinsBelow ?? 65,   // -65% drawdown coverage (bin_step 100 = 65 bins)
+    maxBinsBelow: u.maxBinsBelow ?? 80,   // -80% drawdown coverage (bin_step 100 = 80 bins)
   },
 
   // ─── Scheduling ─────────────────────────
