@@ -604,7 +604,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
   // ── Stage 1.5: OKX suspicious_pct filter ──────────────────────────────────
   // Hard gate: reject if OKX suspicious_pct > maxOkxSuspiciousPct (default 25%)
   // Falls between S1 (GMGN rank/volume filter) and S2 (GMGN token info)
-  const maxOkxSuspicious = g.maxOkxSuspiciousPct ?? 0.25;
+  const maxOkxSuspicious = g.maxOkxSuspiciousPct ?? 0.27;
   const s1b = [];
   for (const token of s1) {
     const mint = token.address;
