@@ -26,7 +26,7 @@ import {
 import { recordPerformance } from "../lessons.js";
 import { isBaseMintOnCooldown, isPoolOnCooldown } from "../pool-memory.js";
 import { isWhitelisted } from "../whitelist.js";
-import { normalizeMint } from "./wallet.js";
+import { normalizeMint, getWalletBalances, swapToken } from "./wallet.js";
 import { appendDecision } from "../decision-log.js";
 
 // ─── Lazy SDK loader ───────────────────────────────────────────
@@ -2007,6 +2007,25 @@ export async function closePosition({ position_address, reason }) {
         },
       });
 
+      // ── Auto-swap base token → SOL (dust threshold: ≥$0.10) ────────────
+      // Runs regardless of caller (deterministic close or LLM agent).
+      // Executor post-hook checks auto_swapped flag to avoid double-swap.
+      const baseMint = pool.lbPair.tokenXMint.toString();
+      try {
+        const balances = await getWalletBalances();
+        const token = balances.tokens?.find(t => t.mint === baseMint);
+        const tokenUsd = token?.usd ?? 0;
+        const tokenBal = token?.balance ?? 0;
+        // Swap if: balance exists AND (real value ≥ $0.10 OR price data missing/zero)
+        if (tokenBal > 0 && (tokenUsd >= 0.10 || tokenUsd === 0)) {
+          log("close", `Auto-swapping ${token.symbol || baseMint.slice(0, 8)} ($${tokenUsd >= 0 ? tokenUsd.toFixed(2) : "unknown"}) back to SOL`);
+          const swapResult = await swapToken({ input_mint: baseMint, output_mint: "SOL", amount: tokenBal });
+          log("close", `Auto-swap result: ${swapResult?.amount_out ? `${swapResult.amount_out} SOL` : JSON.stringify(swapResult)}`);
+        }
+      } catch (swapErr) {
+        log("close_warn", `Auto-swap failed (non-fatal): ${swapErr.message}`);
+      }
+
       return {
         success: true,
         position: position_address,
@@ -2017,7 +2036,8 @@ export async function closePosition({ position_address, reason }) {
         txs: txHashes,
         pnl_usd: pnlUsd,
         pnl_pct: pnlPct,
-        base_mint: pool.lbPair.tokenXMint.toString(),
+        base_mint: baseMint,
+        auto_swapped: true,
         reason: reason || null,
       };
     }
