@@ -21,6 +21,7 @@ import {
   editMessageWithButtons,
   answerCallbackQuery,
   notifyOutOfRange,
+  notifyClose,
   isEnabled as telegramEnabled,
   createLiveMessage,
 } from "./telegram.js";
@@ -268,6 +269,12 @@ export async function runManagementCycle({ silent = false } = {}) {
         const closeResult = await closePosition({ position_address: p.position, reason: closeRule.reason });
         if (closeResult.success) {
           log("state", `[Deterministic close] ${p.pair} — closed ✅ PnL: ${closeResult.pnl_pct}% ($${closeResult.pnl_usd})`);
+          notifyClose({
+            pair: closeResult.pool_name || p.pair,
+            pnlUsd: closeResult.pnl_usd ?? 0,
+            pnlPct: closeResult.pnl_pct ?? 0,
+            reason: closeRule.reason
+          }).catch(() => {});
         } else {
           log("error", `[Deterministic close] ${p.pair} — failed: ${JSON.stringify(closeResult)}`);
         }
@@ -558,11 +565,11 @@ export async function runScreeningCycle({ silent = false } = {}) {
         .join("\n");
       const funnelBlock = buildGmgnFunnelReport(gmgnStageCounts, gmgnStagePassing, gmgnAllRejected, { fromStage: 1 });
       const thresholds = `Thresholds: tvl>$${config.screening.minTvl} | vol>$${config.screening.minVolume} | organic>${config.screening.minOrganic}% | holders>${config.screening.minHolders} | fee/tvl>${config.screening.minFeeActiveTvlRatio}%`;
-      screenReport = funnelBlock
-        ? `No candidates available.\n\n${funnelBlock}`
-        : combinedExamples
-          ? `No candidates available.\nFiltered examples:\n${combinedExamples}`
-          : `No candidates available (all filtered).\n${thresholds}`;
+      const parts = ["⛔ No candidates available."];
+      if (funnelBlock) parts.push(funnelBlock);
+      if (combinedExamples) parts.push(`Hard-filtered:\n${combinedExamples}`);
+      if (!funnelBlock && !combinedExamples) parts.push(thresholds);
+      screenReport = parts.join("\n\n");
       appendDecision({
         type: "no_deploy",
         actor: "SCREENER",
@@ -983,6 +990,7 @@ function computeBinsBelow(volatility, binStep = null) {
   let hi = config.strategy.maxBinsBelow; // fallback
   if (binStep === 80)  { lo = 131;  hi = 205; }
   else if (binStep === 100) { lo = 105; hi = 161; }
+  else if (binStep === 125) { lo = 85;  hi = 130; }
   return Math.max(lo, Math.min(hi, Math.round(lo + ((Number(volatility) || 0) / 5) * (hi - lo))));
 }
 
@@ -1642,6 +1650,7 @@ async function telegramHandler(msg) {
       await sendMessage(`Closing ${pos.pair}...`);
       const result = await closePosition({ position_address: pos.position });
       if (result.success) {
+        notifyClose({ pair: result.pool_name || pos.pair, pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0, reason: "user /close" }).catch(() => {});
         const closeTxs = result.close_txs?.length ? result.close_txs : result.txs;
         const claimNote = result.claim_txs?.length ? `\nClaim txs: ${result.claim_txs.join(", ")}` : "";
         await sendMessage(`✅ Closed ${pos.pair}\nPnL: ${config.management.solMode ? "◎" : "$"}${result.pnl_usd ?? "?"} | close txs: ${closeTxs?.join(", ") || "n/a"}${claimNote}`);
@@ -1661,6 +1670,7 @@ async function telegramHandler(msg) {
       for (const pos of positions) {
         try {
           const result = await closePosition({ position_address: pos.position });
+          if (result.success) notifyClose({ pair: result.pool_name || pos.pair, pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0, reason: "user /closeall" }).catch(() => {});
           results.push(`${pos.pair}: ${result.success ? "closed" : `failed (${result.error || "unknown"})`}`);
         } catch (error) {
           results.push(`${pos.pair}: failed (${error.message})`);
