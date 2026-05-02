@@ -1648,7 +1648,7 @@ async function telegramHandler(msg) {
       if (idx < 0 || idx >= positions.length) { await sendMessage("Invalid number. Use /positions first."); return; }
       const pos = positions[idx];
       await sendMessage(`Closing ${pos.pair}...`);
-      const result = await closePosition({ position_address: pos.position });
+      const result = await closePosition({ position_address: pos.position, config });
       if (result.success) {
         notifyClose({ pair: result.pool_name || pos.pair, pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0, reason: "user /close" }).catch(() => {});
         const closeTxs = result.close_txs?.length ? result.close_txs : result.txs;
@@ -1669,7 +1669,7 @@ async function telegramHandler(msg) {
       const results = [];
       for (const pos of positions) {
         try {
-          const result = await closePosition({ position_address: pos.position });
+          const result = await closePosition({ position_address: pos.position, config });
           if (result.success) notifyClose({ pair: result.pool_name || pos.pair, pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0, reason: "user /closeall" }).catch(() => {});
           results.push(`${pos.pair}: ${result.success ? "closed" : `failed (${result.error || "unknown"})`}`);
         } catch (error) {
