@@ -747,6 +747,7 @@ IMPORTANT:
         onToolFinish: async ({ name, result, success }) => { await liveMessage?.toolFinish(name, result, success); },
       });
     const funnelAppend = buildGmgnFunnelReport(gmgnStageCounts, gmgnStagePassing, gmgnAllRejected, { fromStage: 1 });
+    if (funnelAppend) log("screening", `GMGN funnel:\n${funnelAppend}`);
     screenReport = funnelAppend ? `${content}\n\n─────────────\n${funnelAppend}` : content;
     if (/⛔\s*NO DEPLOY/i.test(content)) {
       appendDecision({
@@ -951,7 +952,7 @@ function getDeterministicCloseRule(position, managementConfig) {
 function buildGmgnFunnelReport(stageCounts, stagePassing = {}, stageRejected = [], { fromStage = 1 } = {}) {
   if (!stageCounts) return null;
   const sc = stageCounts;
-  const funnel = `GMGN funnel: ranked=<b>${sc.ranked ?? "?"}</b> → S1=<b>${sc.s1 ?? "?"}</b> → S1.5=<b>${sc.s1b ?? "?"}</b> → S2=<b>${sc.s2 ?? "?"}</b> → S3=<b>${sc.s3 ?? "?"}</b> → S4=<b>${sc.s4 ?? "?"}</b> → final=<b>${sc.s5 ?? "?"}</b>`;
+  const funnel = `GMGN funnel: ranked=<b>${sc.ranked ?? "?"}</b> → S1=<b>${sc.s1 ?? "?"}</b> → S2=<b>${sc.s2 ?? "?"}</b> → S3=<b>${sc.s3 ?? "?"}</b> → S4=<b>${sc.s4 ?? "?"}</b> → final=<b>${sc.s5 ?? "?"}</b>`;
   const byStage = {};
 
   // Add passing candidates
@@ -973,7 +974,7 @@ function buildGmgnFunnelReport(stageCounts, stagePassing = {}, stageRejected = [
     byStage[stageKey].fail.push(`${rejected.name}: ${rejected.reason}`);
   }
 
-  const stageLabels = { s1: "S1 rank", s1b: "S1.5 OKX", s2: "S2 info", s3: "S3 pool", s4: "S4 indicators", s5: "S5 pick" };
+  const stageLabels = { s1: "S1 rank", s2: "S2 info", s3: "S3 pool", s4: "S4 indicators", s5: "S5 pick" };
   const details = Object.entries(byStage)
     .map(([key, { pass, fail }]) => {
       let lines = [`<b>${stageLabels[key] || key}:</b>`];

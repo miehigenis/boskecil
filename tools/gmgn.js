@@ -3,7 +3,6 @@ import { setDefaultResultOrder } from "dns";
 import { config } from "../config.js";
 import { log } from "../logger.js";
 import { fetchChartIndicatorsForMint } from "./chart-indicators.js";
-import { getAdvancedInfo } from "./okx.js";
 import { isWhitelisted } from "../whitelist.js";
 
 // Force IPv4 — GMGN OpenAPI does not support IPv6
@@ -589,8 +588,8 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
     },
   });
   const ranked = unwrapList(rankPayload, ["rank", "list", "data"]);
-  // Whitelist tokens bypass S1 rank filter — they go straight to S1.5
-  // Only S1.5+ can reject them. S1 itself (rank/mcap/volume/age/bundler) cannot.
+  // Whitelist tokens bypass S1 rank filter — they go straight to S2 (token info)
+  // Only S2+ can reject them. S1 itself (rank/mcap/volume/age/bundler) cannot.
   const s1Candidates = ranked.filter((token) => {
     const mint = token.address;
     if (isWhitelisted(mint)) {
@@ -615,33 +614,11 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
   }));
   log("gmgn", `Stage1 rank: ${ranked.length} → ${s1.length} pass`);
 
-  // ── Stage 1.5: OKX suspicious_pct filter ──────────────────────────────────
-  // Hard gate: reject if OKX suspicious_pct > maxOkxSuspiciousPct (default 25%)
-  // Falls between S1 (GMGN rank/volume filter) and S2 (GMGN token info)
-  const maxOkxSuspicious = g.maxOkxSuspiciousPct ?? 0.27;
-  const s1b = [];
-  for (const token of s1) {
-    const mint = token.address;
-    try {
-      const okx = await getAdvancedInfo(mint);
-      if (okx && maxOkxSuspicious > 0 && okx.suspicious_pct != null && okx.suspicious_pct > maxOkxSuspicious) {
-        filtered.push({ stage: "1.5", name: token.symbol || mint, reason: `OKX suspicious ${(okx.suspicious_pct * 100).toFixed(1)}% > ${(maxOkxSuspicious * 100).toFixed(0)}%` });
-        continue;
-      }
-      s1b.push({ token, okx });
-    } catch (error) {
-      // OKX unavailable — pass through gracefully
-      log("gmgn", `Stage1.5 OKX unavailable for ${token.symbol || mint}: ${error.message} — skip filter`);
-      s1b.push({ token, okx: null });
-    }
-  }
-  stageCounts.s1b = s1b.length;
-  stagePassing.s1b = s1b.map((entry) => ({ name: entry.token.symbol || entry.token.address, reason: "passed OKX filter" }));
-  log("gmgn", `Stage1.5 OKX: ${s1.length} → ${s1b.length} pass`);
+
 
   // ── Stage 2: token info filter ────────────────────────────────────────────
   const s2 = [];
-  for (const { token, okx } of s1b) {
+  for (const token of s1) {
     const mint = token.address;
     try {
       const infoPayload = await gmgnFetch("/v1/token/info", { params: { chain: "sol", address: mint } });
@@ -651,7 +628,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
         filtered.push({ stage: 2, name: token.symbol || mint, reason: infoCheck.reasons.join(", ") });
         continue;
       }
-      s2.push({ token, info, infoCheck, okx });
+      s2.push({ token, info, infoCheck });
     } catch (error) {
       log("gmgn", `Stage2 skip ${token.symbol || mint}: ${error.message}`);
       filtered.push({ stage: 2, name: token.symbol || mint, reason: error.message });
@@ -664,7 +641,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
   // ── Stage 3: holders/traders enrichment (no hard filter) + Meteora pool ──
   const s3 = [];
   const minTvl = num(g.minTvl ?? config.screening.minTvl ?? 0);
-  for (const { token, info, infoCheck, okx } of s2) {
+  for (const { token, info, infoCheck } of s2) {
     const mint = token.address;
     try {
       const [holdersPayload, tradersPayload] = await Promise.all([
@@ -684,7 +661,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
         filtered.push({ stage: 3, name: token.symbol || mint, reason: `no SOL DLMM pool above tvl>${minTvl}` });
         continue;
       }
-      s3.push({ token, info, infoCheck, holdersCheck, topPools, okx });
+      s3.push({ token, info, infoCheck, holdersCheck, topPools });
     } catch (error) {
       log("gmgn", `Stage3 skip ${token.symbol || mint}: ${error.message}`);
       filtered.push({ stage: 3, name: token.symbol || mint, reason: error.message });

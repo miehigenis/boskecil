@@ -95,7 +95,7 @@ export async function getWalletBalances() {
       mint: b.mint,
       symbol: b.symbol || b.mint.slice(0, 8),
       balance: b.balance,
-      usd: b.usdValue ? Math.round(b.usdValue * 100) / 100 : null,
+      usd: b.usdValue != null ? Math.round(b.usdValue * 100) / 100 : 0,
     }));
 
     return {

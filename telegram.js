@@ -433,6 +433,10 @@ export function stopPolling() {
 }
 
 // ─── Notification helpers ────────────────────────────────────────
+function escHtml(str) {
+  return String(str ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, rangeCoverage, binStep, baseFee }) {
   if (hasActiveLiveMessage()) return;
   const priceStr = priceRange
@@ -445,7 +449,7 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
     ? `Bin step: ${binStep ?? "?"}  |  Base fee: ${baseFee != null ? baseFee + "%" : "?"}\n`
     : "";
   await sendHTML(
-    `✅ <b>Deployed</b> ${pair}\n` +
+    `✅ <b>Deployed</b> ${escHtml(pair)}\n` +
     `Amount: ${amountSol} SOL\n` +
     priceStr +
     coverageStr +
@@ -456,11 +460,10 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
 }
 
 export async function notifyClose({ pair, pnlUsd, pnlPct, reason }) {
-  if (hasActiveLiveMessage()) return;
   const sign = pnlUsd >= 0 ? "+" : "";
-  const reasonLine = reason ? `\nReason: ${reason}` : "";
+  const reasonLine = reason ? `\nReason: ${escHtml(reason)}` : "";
   await sendHTML(
-    `🔒 <b>Closed</b> ${pair}${reasonLine}\n` +
+    `🔒 <b>Closed</b> ${escHtml(pair)}${reasonLine}\n` +
     `PnL: ${sign}$${(pnlUsd ?? 0).toFixed(2)} (${sign}${(pnlPct ?? 0).toFixed(2)}%)`
   );
 }
@@ -468,7 +471,7 @@ export async function notifyClose({ pair, pnlUsd, pnlPct, reason }) {
 export async function notifySwap({ inputSymbol, outputSymbol, amountIn, amountOut, tx }) {
   if (hasActiveLiveMessage()) return;
   await sendHTML(
-    `🔄 <b>Swapped</b> ${inputSymbol} → ${outputSymbol}\n` +
+    `🔄 <b>Swapped</b> ${escHtml(inputSymbol)} → ${escHtml(outputSymbol)}\n` +
     `In: ${amountIn ?? "?"} | Out: ${amountOut ?? "?"}\n` +
     `Tx: <code>${tx?.slice(0, 16)}...</code>`
   );
@@ -477,7 +480,7 @@ export async function notifySwap({ inputSymbol, outputSymbol, amountIn, amountOu
 export async function notifyOutOfRange({ pair, minutesOOR }) {
   if (hasActiveLiveMessage()) return;
   await sendHTML(
-    `⚠️ <b>Out of Range</b> ${pair}\n` +
+    `⚠️ <b>Out of Range</b> ${escHtml(pair)}\n` +
     `Been OOR for ${minutesOOR} minutes`
   );
 }

@@ -252,10 +252,8 @@ export function computeChartIndicatorsLocal(mint, {
     return { insufficient_data: true, latest: null };
   }
 
-  // Use most recent `candles` candles
   const recent = allCandles.slice(-candles);
   const previous = allCandles.slice(-candles - 1, -1);
-
   const closes = recent.map(c => c.close);
   const highs  = recent.map(c => c.high);
   const lows   = recent.map(c => c.low);
@@ -581,6 +579,18 @@ export async function confirmIndicatorPreset({
         vibration,
         leveling,
       });
+      // Insufficient data = skip this interval (treat as "not confirmed but don't fail")
+      if (payload?.insufficient_data) {
+        results.push({
+          interval,
+          ok: true,
+          confirmed: null, // null = skipped (neither confirmed nor rejected)
+          reason: "Insufficient candle data for indicator computation",
+          signal: null,
+          latest: null,
+        });
+        continue;
+      }
       const evaluation = evaluatePreset(side, preset, payload, opts);
       results.push({
         interval,
@@ -616,10 +626,24 @@ export async function confirmIndicatorPreset({
     };
   }
 
+  // Entries with confirmed=null = insufficient candle data (young token) — skip, don't reject
+  const decidable = successful.filter((entry) => entry.confirmed !== null);
+  if (decidable.length === 0) {
+    return {
+      enabled: true,
+      confirmed: true,
+      skipped: true,
+      preset,
+      side,
+      reason: "Insufficient candle data on all intervals — skipping indicator filter",
+      intervals: results,
+    };
+  }
+
   const requireAll = !!config.indicators.requireAllIntervals;
   const confirmed = requireAll
-    ? successful.every((entry) => entry.confirmed)
-    : successful.some((entry) => entry.confirmed);
+    ? decidable.every((entry) => entry.confirmed)
+    : decidable.some((entry) => entry.confirmed);
 
   return {
     enabled: true,
@@ -629,8 +653,8 @@ export async function confirmIndicatorPreset({
     side,
     requireAllIntervals: requireAll,
     reason: confirmed
-      ? `${preset} confirmed on ${successful.filter((entry) => entry.confirmed).map((entry) => entry.interval).join(", ")}`
-      : `${preset} not confirmed on ${successful.map((entry) => entry.interval).join(", ")}`,
+      ? `${preset} confirmed on ${decidable.filter((entry) => entry.confirmed).map((entry) => entry.interval).join(", ")}`
+      : `${preset} not confirmed on ${decidable.map((entry) => entry.interval).join(", ")}`,
     intervals: results,
   };
 }
