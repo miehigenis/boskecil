@@ -142,6 +142,52 @@ export function normalizeMint(mint) {
   return mint;
 }
 
+export async function sweepDustTokens({ minUsdValue = 0.10 } = {}) {
+  const balances = await getWalletBalances();
+  if (balances.error || !balances.tokens?.length) {
+    if (balances.error) log("sweep", `Wallet error: ${balances.error}`);
+    return { swept: [], errors: [] };
+  }
+
+  const SOL_MINT = config.tokens.SOL;
+  const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDj1v"; // USDC
+
+  const dustTokens = balances.tokens.filter(t => {
+    if (t.mint === SOL_MINT) return false;
+    if (t.mint === USDC_MINT) return false;
+    if (t.symbol === "SOL" || t.symbol === "USDC") return false;
+    const usd = t.usd ?? 0;
+    return usd >= minUsdValue;
+  });
+
+  if (dustTokens.length === 0) {
+    log("sweep", `No dust tokens >= $${minUsdValue}`);
+    return { swept: [], errors: [] };
+  }
+
+  log("sweep", `Found ${dustTokens.length} token(s) >= $${minUsdValue}: ${dustTokens.map(t => `${t.symbol} ($${t.usd?.toFixed(2)})`).join(", ")}`);
+
+  const results = [];
+  const errors = [];
+  for (const token of dustTokens) {
+    try {
+      log("sweep", `Swapping ${token.balance} ${token.symbol} ($${token.usd?.toFixed(2)}) → SOL`);
+      const result = await swapToken({ input_mint: token.mint, output_mint: SOL_MINT, amount: token.balance });
+      if (result?.tx || result?.dry_run) {
+        results.push({ mint: token.mint, symbol: token.symbol, result });
+        log("sweep", `Sweep success: ${token.symbol} → SOL`);
+      } else {
+        errors.push({ mint: token.mint, symbol: token.symbol, error: "no tx returned" });
+      }
+    } catch (err) {
+      log("sweep_error", `Failed to sweep ${token.symbol}: ${err.message}`);
+      errors.push({ mint: token.mint, symbol: token.symbol, error: err.message });
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return { swept: results, errors };
+}
+
 export async function swapToken({
   input_mint,
   output_mint,

@@ -5,7 +5,7 @@ import { agentLoop } from "./agent.js";
 import { log } from "./logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
 import { getVwapIndicators } from "./tools/chart-indicators.js";
-import { getWalletBalances } from "./tools/wallet.js";
+import { getWalletBalances, sweepDustTokens } from "./tools/wallet.js";
 import { getTopCandidates } from "./tools/screening.js";
 import { formatGmgnCandidateForPrompt } from "./tools/gmgn.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
@@ -423,6 +423,8 @@ After executing, write a brief one-line result per position.
     mgmtReport = `Management cycle failed: ${error.message}`;
   } finally {
     _managementBusy = false;
+    // 10s after management — sweep any dust tokens lingering in wallet
+    setTimeout(() => sweepDustTokens({ minUsdValue: 0.10 }).catch(e => log("sweep_err", `Post-mgmt sweep: ${e.message}`)), 10000);
     if (!silent && telegramEnabled()) {
       if (mgmtReport) {
         if (liveMessage) await liveMessage.finalize(stripThink(mgmtReport)).catch(() => {});
@@ -762,6 +764,8 @@ IMPORTANT:
     screenReport = `Screening cycle failed: ${error.message}`;
   } finally {
     _screeningBusy = false;
+    // 10s after screening — sweep any dust tokens lingering in wallet
+    setTimeout(() => sweepDustTokens({ minUsdValue: 0.10 }).catch(e => log("sweep_err", `Post-screen sweep: ${e.message}`)), 10000);
     if (!silent && telegramEnabled()) {
       if (screenReport) {
         if (liveMessage) await liveMessage.finalize(stripThink(screenReport)).catch(() => {});
@@ -783,7 +787,13 @@ export function startCronJobs() {
 
   const screenTask = cron.schedule(`*/${Math.max(1, config.schedule.screeningIntervalMin)} * * * *`, runScreeningCycle);
 
-  const healthTask = cron.schedule(`0 * * * *`, async () => {
+  // Every 5 min — sweep any non-SOL, non-USDC tokens >= $0.10 to SOL
+  const sweepTask = cron.schedule("*/5 * * * *", async () => {
+    if (_screeningBusy || _managementBusy) return;
+    await sweepDustTokens({ minUsdValue: 0.10 });
+  });
+
+  const healthTask = cron.schedule("0 * * * *", async () => {
     if (_managementBusy) return;
     _managementBusy = true;
     log("cron", "Starting health check");
