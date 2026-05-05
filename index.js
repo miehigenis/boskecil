@@ -994,7 +994,11 @@ function buildGmgnFunnelReport(stageCounts, stagePassing = {}, stageRejected = [
     .map(([key, { pass, fail }]) => {
       let lines = [`<b>${stageLabels[key] || key}:</b>`];
       if (pass.length) lines.push(...pass.map(r => `  ✓ ${r}`));
-      if (fail.length) lines.push(...fail.slice(0, 10).map(r => `  ✗ ${r}`));
+      if (fail.length) lines.push(...fail.slice(0, 10).map(r => {
+        const colonIdx = r.indexOf(':');
+        if (colonIdx < 0) return `  ✗ <b>${r}</b>`;
+        return `  ✗ <b>${r.slice(0, colonIdx)}</b>${r.slice(colonIdx)}`;
+      }));
       return lines.join("\n");
     })
     .join("\n");
