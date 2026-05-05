@@ -567,7 +567,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
       const combinedExamples = combined.slice(0, 5)
         .map((entry) => `- ${entry.name}: ${entry.reason}`)
         .join("\n");
-      const funnelBlock = buildGmgnFunnelReport(gmgnStageCounts, gmgnStagePassing, gmgnAllRejected, { fromStage: 1 });
+      const funnelBlock = buildGmgnFunnelReport(gmgnStageCounts, gmgnStagePassing, gmgnAllRejected, { fromStage: 2 });
       const thresholds = `Thresholds: tvl>$${config.screening.minTvl} | vol>$${config.screening.minVolume} | organic>${config.screening.minOrganic}% | holders>${config.screening.minHolders} | fee/tvl>${config.screening.minFeeActiveTvlRatio}%`;
       const parts = ["⛔ No candidates available."];
       if (funnelBlock) parts.push(funnelBlock);
@@ -585,7 +585,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
     }
 
     if (passing.length <= 1 && gmgnStageCounts) {
-      const funnelBlock = buildGmgnFunnelReport(gmgnStageCounts, gmgnStagePassing, gmgnAllRejected, { fromStage: 1 });
+      const funnelBlock = buildGmgnFunnelReport(gmgnStageCounts, gmgnStagePassing, gmgnAllRejected, { fromStage: 2 });
       if (funnelBlock) log("screening", `GMGN funnel (sparse):\n${funnelBlock}`);
     }
 
@@ -750,7 +750,7 @@ IMPORTANT:
         onToolStart: async ({ name }) => { await liveMessage?.toolStart(name); },
         onToolFinish: async ({ name, result, success }) => { await liveMessage?.toolFinish(name, result, success); },
       });
-    const funnelAppend = buildGmgnFunnelReport(gmgnStageCounts, gmgnStagePassing, gmgnAllRejected, { fromStage: 1 });
+    const funnelAppend = buildGmgnFunnelReport(gmgnStageCounts, gmgnStagePassing, gmgnAllRejected, { fromStage: 2 });
     if (funnelAppend) log("screening", `GMGN funnel:\n${funnelAppend}`);
     screenReport = funnelAppend ? `${content}\n\n─────────────\n${funnelAppend}` : content;
     if (/⛔\s*NO DEPLOY/i.test(content)) {
