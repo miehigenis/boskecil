@@ -120,15 +120,22 @@ Before `deploy_position` executes:
 
 ## bins_below Calculation (SCREENER)
 
-Linear formula based on pool volatility (set in screener prompt, `index.js`):
+Volatility-scaled formula with bin_step overrides (set in `index.js:1051` and mirrored in `tools/executor.js:639`):
 
 ```
-bins_below = round(35 + (volatility / 5) * 34), clamped to [100, 200]
+bins_below = round(lo + (volatility / 5) * (hi - lo)), clamped to [lo, hi]
 ```
 
-- Low volatility (0) → 35 bins
-- High volatility (5+) → 200 bins
-- Any value in between is valid (continuous, not tiered)
+**Bin step overrides:**
+
+| bin_step | lo | hi | notes |
+|----------|----|----|-------|
+| 80 | 131 | 205 | widest range |
+| 100 | 105 | 161 | medium |
+| 125 | 85 | 130 | tightest — highest drawdown risk |
+| other | minBinsBelow | maxBinsBelow | fallback from strategy config |
+
+**Known issue:** `computeBinsBelow` in `index.js` and `_computedBinsBelow` in `tools/executor.js` are duplicated. Edit one and manually sync the other.
 
 ---
 
