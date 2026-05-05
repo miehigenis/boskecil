@@ -452,6 +452,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
   let prePositions, preBalance;
   let liveMessage = null;
   let screenReport = null;
+  let gmgnCandidateDetails = [];
   try {
     [prePositions, preBalance] = await Promise.all([getMyPositions({ force: true }), getWalletBalances()]);
     if (prePositions.total_positions >= config.risk.maxPositions) {
@@ -515,6 +516,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
     const gmgnStagePassing = topCandidates?.stage_passing ?? null;
     const gmgnAllFiltered = topCandidates?.all_filtered ?? [];
     const gmgnAllRejected = topCandidates?.filtered_examples ?? [];
+    gmgnCandidateDetails = topCandidates?.candidate_details ?? [];
 
     const allCandidates = [];
     for (const pool of candidates) {
@@ -771,6 +773,9 @@ IMPORTANT:
         if (liveMessage) await liveMessage.finalize(stripThink(screenReport)).catch(() => {});
         else sendHTML(`<b>🔍 Screening Cycle</b>\n\n${stripThink(screenReport)}`).catch(() => { });
       }
+      // Broadcast candidate details (KOL, dump KOL, holders) as second message
+      const detailsReport = gmgnCandidateDetails?.length ? buildCandidateDetailsReport(gmgnCandidateDetails) : null;
+      if (detailsReport) sendHTML(detailsReport).catch(() => {});
     }
   }
   return screenReport;
@@ -994,6 +999,33 @@ function buildGmgnFunnelReport(stageCounts, stagePassing = {}, stageRejected = [
     })
     .join("\n");
   return details ? `${funnel}\n\n${details}` : funnel;
+}
+
+function buildCandidateDetailsReport(candidates = []) {
+  if (!candidates.length) return null;
+  const lines = candidates.map((p) => {
+    const sym = p.name || p.base?.symbol || "?";
+    const mcap = p.mcap != null ? `$${(p.mcap / 1000).toFixed(0)}k` : "";
+    const tvl = p.active_tvl != null ? `tvl$${(p.active_tvl / 1000).toFixed(0)}k` : "";
+    const holders = p.holders != null ? `holders=${p.holders.toLocaleString()}` : "";
+    const smart = p.gmgn_smart_wallets != null ? `smart=${p.gmgn_smart_wallets}` : "";
+    const kol = p.gmgn_kol_wallets != null ? `kol=${p.gmgn_kol_wallets}` : "";
+    const feeTvl = p.fee_active_tvl_ratio != null ? `fee/tvl=${p.fee_active_tvl_ratio}%` : "";
+    const top10 = p.gmgn_top10_holder_pct != null ? `top10=${p.gmgn_top10_holder_pct}%` : "";
+    const dumpKolHolders = p.gmgn_dump_kol_holders || [];
+    const dumpMinor = p.gmgn_dump_kol_minor ?? 0;
+    const base = [sym, mcap, tvl, holders, smart, kol, feeTvl, top10].filter(Boolean).join(" | ");
+    let risk = "";
+    if (dumpKolHolders.length) {
+      const names = dumpKolHolders.map((k) => `${k.name} ${k.amountPct}%`).join(", ");
+      risk += ` ⚠️ DUMP KOL: ${names}`;
+    }
+    if (dumpMinor > 0 && !dumpKolHolders.length) {
+      risk += ` ⚠️ DUMP KOL minor: ${dumpMinor} wallet(s)`;
+    }
+    return `${base}${risk ? "\n  " + risk : ""}`;
+  });
+  return `<b>📊 Candidate Details:</b>\n${lines.join("\n")}`;
 }
 
 function computeBinsBelow(volatility, binStep = null) {

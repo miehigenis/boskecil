@@ -742,6 +742,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
     stage_counts: stageCounts,
     stage_passing: stagePassing,
     pools,
+    candidate_details: pools, // full enriched data with KOL/dump info
     filtered_examples: filtered,
   };
 }
