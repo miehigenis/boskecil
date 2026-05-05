@@ -752,7 +752,23 @@ IMPORTANT:
       });
     const funnelAppend = buildGmgnFunnelReport(gmgnStageCounts, gmgnStagePassing, gmgnAllRejected, { fromStage: 2 });
     if (funnelAppend) log("screening", `GMGN funnel:\n${funnelAppend}`);
-    screenReport = funnelAppend ? `${content}\n\n─────────────\n${funnelAppend}` : content;
+
+    // If no candidates passed, extract S3-S5 rejection reasons from LLM reasoning
+    let funnelFinal = funnelAppend;
+    if (gmgnStageCounts?.s5 == null || gmgnStageCounts?.s5 == 0) {
+      const lines = content.split('\n');
+      const stageLines = lines.filter(l => /Stage\s*[345]/i.test(l) && /→|skip|reject|eliminat|filter|no /i.test(l));
+      if (stageLines.length > 0) {
+        const llmReasons = stageLines
+          .map(l => l.replace(/\*\*/g, '').trim())
+          .filter(l => l.length > 0 && l.length < 200)
+          .slice(0, 5)
+          .join('\n');
+        if (llmReasons) funnelFinal = funnelAppend ? `${funnelAppend}\n\n${llmReasons}` : llmReasons;
+      }
+    }
+
+    screenReport = funnelFinal ? `${content}\n\n─────────────\n${funnelFinal}` : content;
     if (/⛔\s*NO DEPLOY/i.test(content)) {
       appendDecision({
         type: "no_deploy",
