@@ -220,8 +220,8 @@ function passBasicRankFilter(token) {
   const tokenAgeHours = num(token.creation_timestamp) > 0
     ? (Date.now() / 1000 - num(token.creation_timestamp)) / 3600
     : null;
-  if (num(token.market_cap) < g.minMcap) reasons.push(`mcap ${num(token.market_cap)} < ${g.minMcap}`);
-  if (g.maxMcap != null && num(token.market_cap) > g.maxMcap) reasons.push(`mcap ${num(token.market_cap)} > ${g.maxMcap}`);
+  if (num(token.market_cap) < g.minMcap) reasons.push(`mcap $${num(token.market_cap).toLocaleString()} < $${g.minMcap.toLocaleString()}`);
+  if (g.maxMcap != null && num(token.market_cap) > g.maxMcap) reasons.push(`mcap $${num(token.market_cap).toLocaleString()} > $${g.maxMcap.toLocaleString()}`);
   if (num(token.bundler_rate) > g.maxBundlerRate) reasons.push(`bundler ${(num(token.bundler_rate) * 100).toFixed(1)}% > ${(g.maxBundlerRate * 100).toFixed(1)}%`);
   if (g.minTokenAgeHours != null && tokenAgeHours != null && tokenAgeHours < g.minTokenAgeHours) {
     reasons.push(`age ${tokenAgeHours.toFixed(2)}h < ${g.minTokenAgeHours}h`);
@@ -229,7 +229,7 @@ function passBasicRankFilter(token) {
   if (g.maxTokenAgeHours != null && tokenAgeHours != null && tokenAgeHours > g.maxTokenAgeHours) {
     reasons.push(`age ${tokenAgeHours.toFixed(2)}h > ${g.maxTokenAgeHours}h`);
   }
-  if (num(token.volume) < g.minVolume) reasons.push(`volume ${num(token.volume)} < ${g.minVolume}`);
+  if (num(token.volume) < g.minVolume) reasons.push(`vol $${num(token.volume).toLocaleString()} < $${g.minVolume.toLocaleString()}`);
   return { pass: reasons.length === 0, reasons };
 }
 
@@ -658,7 +658,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
 
       const topPools = await fetchTopMeteoraDlmmPoolsForMint(mint, minTvl, 2);
       if (topPools.length === 0) {
-        filtered.push({ stage: 3, name: token.symbol || mint, reason: `no SOL DLMM pool above tvl>${minTvl}` });
+        filtered.push({ stage: 3, name: token.symbol || mint, reason: `no SOL DLMM pool above tvl>$${minTvl.toLocaleString()}` });
         continue;
       }
       s3.push({ token, info, infoCheck, holdersCheck, topPools });
