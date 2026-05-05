@@ -460,6 +460,22 @@ function evaluatePreset(side, preset, payload, opts = {}) {
             reason: "Supertrend bearish confirmation or RSI overbought",
             signal: summary,
           };
+    case "rsi_supertrend_cross":
+      return side === "entry"
+        ? {
+            confirmed:
+              (rsi != null && rsi >= overbought && (summary.supertrendBreakUp || isBullish)) ||
+              (rsi != null && rsi <= oversold  && (summary.supertrendBreakDown || isBearish)),
+            reason: rsi >= overbought
+              ? `RSI overbought (${rsi?.toFixed(2)}) + bullish Supertrend — entry`
+              : `RSI oversold (${rsi?.toFixed(2)}) + bearish Supertrend — entry`,
+            signal: summary,
+          }
+        : {
+            confirmed: false,
+            reason: "No exit logic for this preset — manual exit only",
+            signal: summary,
+          };
     case "bb_plus_rsi":
       return side === "entry"
         ? {

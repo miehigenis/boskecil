@@ -641,6 +641,7 @@ async function runSafetyChecks(name, args) {
         let hi = config.strategy.maxBinsBelow;   // 210 fallback
         if (binStep === 80)       { lo = 131; hi = 205; }
         else if (binStep === 100) { lo = 105; hi = 161; }
+        else if (binStep === 125) { lo = 85;  hi = 130; }
         return Math.max(lo, Math.min(hi, Math.round(lo + ((Number(volatility) || 0) / 5) * (hi - lo))));
       }
       const computedBins = _computedBinsBelow(volForCalc, realBinStep);
