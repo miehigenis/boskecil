@@ -3,7 +3,7 @@ import cron from "node-cron";
 import readline from "readline";
 import { agentLoop } from "./agent.js";
 import { log } from "./logger.js";
-import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
+import { getMyPositions, getActiveBin } from "./tools/dlmm.js";
 import { getVwapIndicators } from "./tools/chart-indicators.js";
 import { getWalletBalances, sweepDustTokens } from "./tools/wallet.js";
 import { getTopCandidates } from "./tools/screening.js";
@@ -266,7 +266,7 @@ export async function runManagementCycle({ silent = false } = {}) {
         // ── Deterministic CLOSE: execute directly, no LLM ──────────────────
         setCloseReason(p.position, closeRule.reason);
         log("state", `[Deterministic close] ${p.pair} — Rule ${closeRule.rule}: ${closeRule.reason} — executing close_position`);
-        const closeResult = await closePosition({ position_address: p.position, reason: closeRule.reason });
+        const closeResult = await executeTool("close_position", { position_address: p.position, reason: closeRule.reason });
         if (closeResult.success) {
           log("state", `[Deterministic close] ${p.pair} — closed ✅ PnL: ${closeResult.pnl_pct}% ($${closeResult.pnl_usd})`);
           notifyClose({
@@ -1711,7 +1711,7 @@ async function telegramHandler(msg) {
       if (idx < 0 || idx >= positions.length) { await sendMessage("Invalid number. Use /positions first."); return; }
       const pos = positions[idx];
       await sendMessage(`Closing ${pos.pair}...`);
-      const result = await closePosition({ position_address: pos.position, config });
+      const result = await executeTool("close_position", { position_address: pos.position, reason: "user /close" });
       if (result.success) {
         notifyClose({ pair: result.pool_name || pos.pair, pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0, reason: "user /close" }).catch(() => {});
         const closeTxs = result.close_txs?.length ? result.close_txs : result.txs;
@@ -1732,7 +1732,7 @@ async function telegramHandler(msg) {
       const results = [];
       for (const pos of positions) {
         try {
-          const result = await closePosition({ position_address: pos.position, config });
+          const result = await executeTool("close_position", { position_address: pos.position, reason: "user /close" });
           if (result.success) notifyClose({ pair: result.pool_name || pos.pair, pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0, reason: "user /closeall" }).catch(() => {});
           results.push(`${pos.pair}: ${result.success ? "closed" : `failed (${result.error || "unknown"})`}`);
         } catch (error) {

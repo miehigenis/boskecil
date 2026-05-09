@@ -476,6 +476,20 @@ function evaluatePreset(side, preset, payload, opts = {}) {
             reason: "No exit logic for this preset — manual exit only",
             signal: summary,
           };
+    case "rsi_overbought_supertrend":
+      return side === "entry"
+        ? {
+            confirmed: rsi != null && rsi >= overbought && (summary.supertrendBreakUp || isBullish),
+            reason: rsi != null
+              ? `RSI ${rsi.toFixed(2)} >= overbought ${overbought} with bullish Supertrend`
+              : "RSI unavailable",
+            signal: summary,
+          }
+        : {
+            confirmed: false,
+            reason: "No exit logic for this preset — use exitPreset separately",
+            signal: summary,
+          };
     case "bb_plus_rsi":
       return side === "entry"
         ? {

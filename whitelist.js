@@ -3,7 +3,7 @@
  *
  * - Tokens in the whitelist are PRIORITY: screener always attempts to deploy into them.
  * - GMGN S1 rank filter is BYPASSED for whitelist tokens (only S2+ filters apply).
- * - Pool-memory cooldowns and blacklist are BYPASSED for whitelist tokens.
+ * - Pool-memory cooldowns are BYPASSED for whitelist tokens (blacklist is NOT bypassed).
  * - Entry indicators (checkBounceSetup / Stage4) STILL APPLY — can't override those.
  * - Deterministic exit rules STILL APPLY — can't override those.
  * - User-config parameters (S2+) can still reject whitelist tokens.

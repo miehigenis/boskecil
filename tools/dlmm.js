@@ -669,9 +669,9 @@ export async function deployPosition({
   if (isSingleSidedSol) {
     activeBinsAbove = 0;
   }
-  const totalBins = activeBinsBelow + activeBinsAbove;
-  const isWideRange = totalBins > 69;
-  const minBinId = activeBin.binId - activeBinsBelow;
+  let totalBins = activeBinsBelow + activeBinsAbove;
+  let isWideRange = totalBins > 69;
+  let minBinId = activeBin.binId - activeBinsBelow;
   const maxBinId = isSingleSidedSol ? activeBin.binId : activeBin.binId + activeBinsAbove;
 
   if (minBinId > maxBinId) {
@@ -683,7 +683,33 @@ export async function deployPosition({
     );
   }
 
-  await assertRangeDoesNotRequireBinArrayInitialization(pool, minBinId, maxBinId);
+  // Reduce bins_below step-by-step until range fits within already-initialized bin arrays.
+  // Avoids non-refundable bin-array rent when deploying into a wide uninitialized range.
+  const originalBinsBelow = activeBinsBelow;
+  const floorBinsBelow = actualBinStep === 80 ? 131 : actualBinStep === 100 ? 105 : actualBinStep === 125 ? 85 : (config.strategy.minBinsBelow ?? 69);
+  const BIN_REDUCE_STEP = 10;
+  while (true) {
+    try {
+      await assertRangeDoesNotRequireBinArrayInitialization(pool, minBinId, maxBinId);
+      break;
+    } catch (_initErr) {
+      const next = activeBinsBelow - BIN_REDUCE_STEP;
+      if (next < floorBinsBelow) {
+        throw new Error(
+          `Deploy skipped: no initialized bin-array range found between floor ${floorBinsBelow} and ${originalBinsBelow} bins_below. ` +
+          `Try a different pool or wait for bin arrays to be initialized.`,
+        );
+      }
+      log("deploy", `bins_below ${activeBinsBelow}→${next}: range requires bin-array init, reducing to avoid non-refundable rent`);
+      activeBinsBelow = next;
+      minBinId = activeBin.binId - activeBinsBelow;
+      totalBins = activeBinsBelow + activeBinsAbove;
+      isWideRange = totalBins > 69;
+    }
+  }
+  if (activeBinsBelow !== originalBinsBelow) {
+    log("deploy", `bins_below reduced from ${originalBinsBelow} to ${activeBinsBelow} (avoided bin-array initialization cost)`);
+  }
 
   const minPrice = Number(getPriceOfBinByBinId(minBinId, actualBinStep).toString());
   const maxPrice = Number(getPriceOfBinByBinId(maxBinId, actualBinStep).toString());
@@ -867,6 +893,22 @@ export async function deployPosition({
         const txHash = await sendAndConfirmTransaction(getConnection(), createTxArray[i], signers);
         txHashes.push(txHash);
         log("deploy", `Create tx ${i + 1}/${createTxArray.length}: ${txHash}`);
+      }
+
+      // Phase 1.5: Pre-initialize any missing bin arrays for the full range.
+      // chunkDepositWithRebalanceEndpoint generates initBinArray ixs per-chunk but within
+      // the same tx as rebalanceLiquidity. If a bin array for chunk N is missing AND the
+      // on-chain program needs it before init completes (e.g. for adjacent-bin fee accounting),
+      // rebalance fails with InvalidBinArray. Sending init as a separate prior tx avoids this.
+      if (_getBinArrayIndexesCoverage) {
+        const allBinArrayIndexes = _getBinArrayIndexesCoverage(new BN(minBinId), new BN(maxBinId));
+        const initIxs = await pool.initializeBinArrays(allBinArrayIndexes, wallet.publicKey);
+        if (initIxs.length > 0) {
+          const initTx = new Transaction().add(...initIxs);
+          const initHash = await sendAndConfirmTransaction(getConnection(), initTx, [wallet]);
+          txHashes.push(initHash);
+          log("deploy", `Pre-init bin arrays tx (${allBinArrayIndexes.length} indexes, ${initIxs.length} missing): ${initHash}`);
+        }
       }
 
       // Phase 2: Add liquidity (may be multiple txs)
