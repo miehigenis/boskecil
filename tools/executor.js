@@ -21,7 +21,7 @@ import { blockDev, unblockDev, listBlockedDevs } from "../dev-blocklist.js";
 import { addSmartWallet, removeSmartWallet, listSmartWallets, checkSmartWalletsOnPool } from "../smart-wallets.js";
 import { getTokenInfo, getTokenHolders, getTokenNarrative } from "./token.js";
 import { config, reloadScreeningThresholds } from "../config.js";
-import { getRecentDecisions } from "../decision-log.js";
+import { getRecentDecisions, appendDecision } from "../decision-log.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -469,6 +469,34 @@ export async function executeTool(name, args) {
         notifySwap({ inputSymbol: args.input_mint?.slice(0, 8), outputSymbol: args.output_mint === "So11111111111111111111111111111111111111112" || args.output_mint === "SOL" ? "SOL" : args.output_mint?.slice(0, 8), amountIn: result.amount_in, amountOut: result.amount_out, tx: result.tx }).catch(() => {});
       } else if (name === "deploy_position") {
         notifyDeploy({ pair: result.pool_name || args.pool_name || args.pool_address?.slice(0, 8), amountSol: args.amount_y ?? args.amount_sol ?? 0, position: result.position, tx: result.txs?.[0] ?? result.tx, priceRange: result.price_range, rangeCoverage: result.range_coverage, binStep: result.bin_step, baseFee: result.base_fee }).catch(() => {});
+        // Lazy import to avoid circular dependency with index.js
+        let ic = null;
+        try {
+          const { getLatestIndicatorMap } = await import("../index.js");
+          const indicatorMap = getLatestIndicatorMap();
+          ic = indicatorMap[args.pool_address] || null;
+        } catch (_) {
+          // Circular import not yet ready — indicator status will be null in decision log
+        }
+        const icSummary = ic
+          ? (ic.confirmed ? `indicator=confirmed` : ic.skipped ? `indicator=skipped(${ic.reason})` : `indicator=rejected(${ic.reason})`)
+          : null;
+        appendDecision({
+          type: "deploy",
+          actor: "SCREENER",
+          pool: args.pool_address,
+          pool_name: result.pool_name || args.pool_name || args.pool_address,
+          position: result.position,
+          summary: `Deployed ${args.amount_y ?? args.amount_sol ?? 0} SOL`,
+          reason: icSummary,
+          metrics: {
+            bin_step: result.bin_step,
+            base_fee: result.base_fee,
+            range_downside_pct: result.range_coverage?.downside_pct,
+            range_upside_pct: result.range_coverage?.upside_pct,
+            strategy: args.strategy,
+          },
+        });
       } else if (name === "close_position") {
         notifyClose({ pair: result.pool_name || args.position_address?.slice(0, 8), pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0, reason: result.reason || args.reason || popCloseReason(args.position_address) }).catch(() => {});
         // Note low-yield closes in pool memory so screener avoids redeploying

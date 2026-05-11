@@ -81,6 +81,7 @@ let _managementBusy = false; // prevents overlapping management cycles
 let _screeningBusy = false;  // prevents overlapping screening cycles
 let _screeningLastTriggered = 0; // epoch ms — prevents management from spamming screening
 let _pollTriggeredAt = 0; // epoch ms — cooldown for poller-triggered management
+let _latestIndicatorMap = {}; // pool_address -> indicator_confirmation, set during screening, read by executor on deploy
 const _peakConfirmTimers = new Map();
 const _trailingDropConfirmTimers = new Map();
 const TRAILING_PEAK_CONFIRM_DELAY_MS = 15_000;
@@ -263,6 +264,13 @@ export async function runManagementCycle({ silent = false } = {}) {
 
       const closeRule = getDeterministicCloseRule(p, config.management);
       if (closeRule) {
+        // Skip if position was already auto-closed by syncOpenPositions
+        const tracked = getTrackedPosition(p.position);
+        if (tracked?.closed) {
+          log("state", `[Deterministic close] ${p.pair} — already closed via sync, skipping duplicate close`);
+          actionMap.set(p.position, { action: "STAY", deterministicClose: true, alreadyClosed: true });
+          continue;
+        }
         // ── Deterministic CLOSE: execute directly, no LLM ──────────────────
         setCloseReason(p.position, closeRule.reason);
         log("state", `[Deterministic close] ${p.pair} — Rule ${closeRule.rule}: ${closeRule.reason} — executing close_position`);
@@ -626,12 +634,31 @@ export async function runScreeningCycle({ silent = false } = {}) {
       const pvpLine = pool.is_pvp
         ? `  pvp: HIGH — rival ${pool.pvp_rival_name || pool.pvp_symbol} (${pool.pvp_rival_mint?.slice(0, 8)}...) has pool ${pool.pvp_rival_pool?.slice(0, 8)}..., tvl=$${pool.pvp_rival_tvl}, holders=${pool.pvp_rival_holders}, fees=${pool.pvp_rival_fees}SOL`
         : null;
+      const indicatorLine = (() => {
+        const ic = pool.indicator_confirmation;
+        if (!ic) return null;
+        if (!ic.enabled) return null;
+        const status = ic.skipped
+          ? `⚠ skipped: ${ic.reason}`
+          : ic.confirmed
+            ? `✓ confirmed`
+            : `✗ rejected`;
+        return `  indicator: ${ic.preset || config.indicators.entryPreset} — ${status}`;
+      })();
+
+      // Attach indicator confirmation as a private field on pool for deploy audit
+      pool._indicatorConfirmation = pool.indicator_confirmation || null;
+
+      // Extract pool's private _indicatorConfirmation so executor can attach it to deploy decision log
+      const poolIndicatorConf = pool._indicatorConfirmation;
+
       let block;
       if (pool.gmgn) {
         block = [
           `POOL: ${pool.name} (${pool.pool})`,
           formatGmgnCandidateForPrompt(pool),
           pvpLine,
+          indicatorLine,
           `  smart_wallets: ${sw?.in_pool?.length ?? 0} present${sw?.in_pool?.length ? ` → CONFIDENCE BOOST (${sw.in_pool.map(w => w.name).join(", ")})` : ""}`,
           activeBin != null ? `  active_bin: ${activeBin}` : null,
           n?.narrative ? `  narrative_untrusted: ${sanitizeUntrustedPromptText(n.narrative, 500)}` : `  narrative_untrusted: none`,
@@ -647,6 +674,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
           `  audit: top10=${top10Pct}%, bots=${botPct}%, fees=${feesSol}SOL${launchpad ? `, launchpad=${launchpad}` : ""}`,
           gmgnPriceLine,
           pvpLine,
+          indicatorLine,
           okxParts ? `  okx: ${okxParts}` : okxUnavailable ? `  okx: unavailable` : null,
           okxTags  ? `  tags: ${okxTags}` : null,
           pool.price_vs_ath_pct != null ? `  ath: price_vs_ath=${pool.price_vs_ath_pct}%${pool.top_cluster_trend ? `, top_cluster=${pool.top_cluster_trend}` : ""}` : null,
@@ -672,8 +700,16 @@ export async function runScreeningCycle({ silent = false } = {}) {
         });
       }
 
-      return block;
+      return { block, poolIndicatorConf };
     });
+
+    // Store indicator map globally so executor can look up indicator status on deploy
+    _latestIndicatorMap = {};
+    passing.forEach(({ pool }) => {
+      const ic = pool._indicatorConfirmation;
+      if (ic && pool.pool) _latestIndicatorMap[pool.pool] = ic;
+    });
+    const blockList = candidateBlocks.map(({ block }) => block);
 
     const weightsSummary = config.darwin?.enabled ? getWeightsSummary() : null;
 
@@ -683,15 +719,16 @@ ${strategyBlock}
 Positions: ${prePositions.total_positions}/${config.risk.maxPositions} | SOL: ${currentBalance.sol.toFixed(3)} | Deploy: ${deployAmount} SOL
 
 PRE-LOADED CANDIDATES (${passing.length} pools):
-${candidateBlocks.join("\n\n")}
+${blockList.join("\n\n")}
 
 STEPS:
 1. Pick the best candidate based on narrative quality, smart wallets, and pool metrics.
-2. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
+2. HARD RULE: Only candidates with indicator = ✓ confirmed are eligible for deploy. If indicator = ✗ rejected or ⚠ skipped, DO NOT DEPLOY that candidate.
+3. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
    strategy = ${config.strategy.strategy} (always use this, never change it).
    bins_below = round(${config.strategy.minBinsBelow} + (volatility/5)*${config.strategy.maxBinsBelow - config.strategy.minBinsBelow}) clamped to [${config.strategy.minBinsBelow},${config.strategy.maxBinsBelow}].
    bins_above = 0. Single-side SOL only: set amount_y, keep amount_x = 0.
-3. Report in this exact format (no tables, no extra sections):
+4. Report in this exact format (no tables, no extra sections):
    🚀 <b>DEPLOYED</b>
 
    <b><pool name></b>
@@ -739,11 +776,12 @@ STEPS:
    <name or none>
 
    WHY SKIPPED
-   <2-4 concise sentences explaining why nothing was good enough>
+   <2-4 concise sentences — if all candidates had ✗ rejected or ⚠ skipped indicators, say so explicitly>
 
    REJECTED
-   <short flat list of top candidate names and why they were skipped>
+   <short flat list of top candidate names and why they were skipped — include indicator status>
 IMPORTANT:
+- HARD RULE: If the top candidate has indicator = ✗ rejected or ⚠ skipped, you MUST pick the next confirmed candidate. Do NOT deploy a candidate with a non-confirmed indicator.
 - Never write "unknown" for OKX. Use real values, omit missing fields, or write exactly "OKX: unavailable".
 - Keep the whole report compact and highly scannable for Telegram.
       `, config.llm.maxSteps, [], "SCREENER", config.llm.screeningModel, 2048, {
@@ -1082,6 +1120,10 @@ function getLatestCandidatesMeta() {
     count: _latestCandidates.length,
     updatedAt: _latestCandidatesAt,
   };
+}
+
+export function getLatestIndicatorMap() {
+  return _latestIndicatorMap;
 }
 
 function describeLatestCandidates(limit = 5) {

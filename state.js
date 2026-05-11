@@ -502,10 +502,11 @@ export function setLastBriefingDate() {
 /**
  * Reconcile local state with actual on-chain positions.
  * Marks any local open positions as closed if they are not in the on-chain list.
+ * Logs JSONL entry + sends Telegram notification for each auto-closed position.
  */
 const SYNC_GRACE_MS = 5 * 60_000; // don't auto-close positions deployed < 5 min ago
 
-export function syncOpenPositions(active_addresses) {
+export async function syncOpenPositions(active_addresses) {
   const state = load();
   const activeSet = new Set(active_addresses);
   let changed = false;
@@ -526,7 +527,85 @@ export function syncOpenPositions(active_addresses) {
     pos.notes.push(`Auto-closed during state sync (not found on-chain)`);
     changed = true;
     log("state", `Position ${posId} auto-closed (missing from on-chain data)`);
+
+    // Fetch on-chain PnL and log + notify
+    fetchAutoClosedPnLAndNotify(posId, pos.pool, pos.pool_name).catch((err) => {
+      log("sync_close_error", `Failed to fetch/notify for auto-closed ${posId}: ${err.message}`);
+    });
   }
 
   if (changed) save(state);
+}
+
+/**
+ * Fetch closed PnL from Meteora API for an auto-closed position,
+ * then log to JSONL and fire Telegram notification.
+ */
+async function fetchAutoClosedPnLAndNotify(position_address, pool_address, pool_name) {
+  const walletAddress = (await import("./telegram.js").then(() => null)).catch(() => null);
+  // We need wallet address — get from environment or pass through
+  const { config } = await import("../config.js");
+  const RPC_URL = process.env.RPC_URL;
+  const privateKey = process.env.WALLET_PRIVATE_KEY;
+  if (!RPC_URL || !privateKey) return;
+
+  try {
+    const { Connection, Keypair } = await import("@solana/web3.js");
+    const bs58 = await import("bs58");
+    const wallet = Keypair.fromSecretKey(bs58.default.decode(privateKey));
+    const walletAddressStr = wallet.publicKey.toString();
+
+    let pnlUsd = null;
+    let pnlPct = null;
+
+    if (pool_address) {
+      try {
+        const closedUrl = `https://dlmm.datapi.meteora.ag/positions/${pool_address}/pnl?user=${walletAddressStr}&status=closed&pageSize=50&page=1`;
+        for (let attempt = 0; attempt < 6; attempt++) {
+          const res = await fetch(closedUrl);
+          if (res.ok) {
+            const data = await res.json();
+            const posEntry = (data.positions || []).find((e) => e.positionAddress === position_address);
+            if (posEntry) {
+              pnlUsd = parseFloat(posEntry.pnlUsd || 0);
+              pnlPct = parseFloat(posEntry.pnlPctChange || 0);
+              break;
+            }
+          }
+          if (attempt < 5) await new Promise((r) => setTimeout(r, 5000));
+        }
+      } catch (e) {
+        log("sync_close_warn", `Closed PnL fetch failed for ${position_address}: ${e.message}`);
+      }
+    }
+
+    // Log JSONL entry
+    const timestamp = new Date().toISOString();
+    const entry = {
+      timestamp,
+      tool: "close_position",
+      args: { position_address, reason: "auto-closed (not found on-chain)" },
+      result: { success: true, position: position_address, pool: pool_address, pnl_usd: pnlUsd, pnl_pct: pnlPct },
+      success: true,
+      auto_closed: true,
+      duration_ms: 0,
+    };
+    const { logAction } = await import("../logger.js");
+    logAction(entry);
+
+    // Fire Telegram notification
+    try {
+      const { notifyClose } = await import("../telegram.js");
+      notifyClose({
+        pair: pool_name || position_address.slice(0, 8),
+        pnlUsd: pnlUsd ?? 0,
+        pnlPct: pnlPct ?? 0,
+        reason: "auto-closed (not found on-chain)",
+      }).catch(() => {});
+    } catch (e) {
+      log("sync_close_warn", `notifyClose failed for ${position_address}: ${e.message}`);
+    }
+  } catch (err) {
+    log("sync_close_error", `Failed to process auto-close for ${position_address}: ${err.message}`);
+  }
 }

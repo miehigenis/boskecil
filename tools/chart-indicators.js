@@ -17,7 +17,12 @@ const DEFAULT_INTERVALS = ["5_MINUTE"];
 const DEFAULT_CANDLES = 298;
 const CLI = "/home/ubuntu/.local/bin/onchainos";
 
-// ── Candle Fetcher (onchainos CLI — already local) ─────────────────────────
+// bar to interval mapping for onchainos
+const BAR_MAP = {
+  "1_MINUTE":  "1m",
+  "5_MINUTE":  "5m",
+  "15_MINUTE": "15m",
+};
 
 export function fetchCandles(mint, bar = "5m", limit = 299) {
   try {
@@ -246,7 +251,7 @@ export function computeChartIndicatorsLocal(mint, {
   vibration = 10,
   leveling = 10,
 } = {}) {
-  const bar = interval === "15_MINUTE" ? "15m" : "5m";
+  const bar = BAR_MAP[interval] || "5m";
   const allCandles = fetchCandles(mint, bar, candles + 40); // extra for lookback
   if (allCandles.length < candles) {
     return { insufficient_data: true, latest: null };
@@ -298,7 +303,7 @@ function normalizeIntervals(intervals) {
   const list = Array.isArray(intervals) ? intervals : DEFAULT_INTERVALS;
   return list
     .map((value) => String(value || "").trim().toUpperCase())
-    .filter((value) => value === "5_MINUTE" || value === "15_MINUTE");
+    .filter((value) => value === "1_MINUTE" || value === "5_MINUTE" || value === "15_MINUTE");
 }
 
 function buildSignalSummary(payload) {

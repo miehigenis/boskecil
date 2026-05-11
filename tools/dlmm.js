@@ -1283,7 +1283,7 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
           agentId: config.hiveMind.agentId || "agent-local",
         });
         const normalizedPositions = Array.isArray(result.positions) ? result.positions : [];
-        syncOpenPositions(normalizedPositions.map((p) => p.position));
+        await syncOpenPositions(normalizedPositions.map((p) => p.position));
         _positionsCache = {
           wallet: walletAddress,
           total_positions: Number(result.total_positions || 0),
@@ -1446,7 +1446,7 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
     }
 
     const result = { wallet: walletAddress, total_positions: positions.length, positions };
-    syncOpenPositions(positions.map(p => p.position));
+    await syncOpenPositions(positions.map(p => p.position));
     _positionsCache = result;
     _positionsCacheAt = Date.now();
     return result;
