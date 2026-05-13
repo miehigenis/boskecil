@@ -72,35 +72,35 @@ export const config = {
   // then hardcoded default. user-config.json places most screening keys inside a
   // "screening" sub-object — this dual-read ensures both layouts are supported.
   screening: {
-    source:                   u.screening?.source            ?? u.screeningSource            ?? "meteora", // meteora | gmgn
+    source:                   u.screening?.source            ?? u.screeningSource            ?? "gmgn", // meteora | gmgn
     excludeHighSupplyConcentration: u.screening?.excludeHighSupplyConcentration ?? u.excludeHighSupplyConcentration ?? true,
-    minFeeActiveTvlRatio:      u.screening?.minFeeActiveTvlRatio  ?? u.minFeeActiveTvlRatio  ?? 0.05,
-    minTvl:                    u.screening?.minTvl             ?? u.minTvl             ?? 10_000,
-    maxTvl:                    u.screening?.maxTvl !== undefined ? (u.screening?.maxTvl ?? u.maxTvl) : 150_000,
-    minVolume:                 u.screening?.minVolume          ?? u.minVolume          ?? 1000,
+    minFeeActiveTvlRatio:      u.screening?.minFeeActiveTvlRatio  ?? u.minFeeActiveTvlRatio  ?? 0.1,
+    minTvl:                    u.screening?.minTvl             ?? u.minTvl             ?? 7000,
+    maxTvl:                    u.screening?.maxTvl !== undefined ? (u.screening?.maxTvl ?? u.maxTvl) : 150000,
+    minVolume:                 u.screening?.minVolume          ?? u.minVolume          ?? 5000,
     minOrganic:                u.screening?.minOrganic          ?? u.minOrganic          ?? 64,
-    minQuoteOrganic:           u.screening?.minQuoteOrganic    ?? u.minQuoteOrganic    ?? 60,
+    minQuoteOrganic:           u.screening?.minQuoteOrganic    ?? u.minQuoteOrganic    ?? 90,
     minHolders:                u.screening?.minHolders         ?? u.minHolders         ?? 100,
-    minMcap:                   u.screening?.minMcap            ?? u.minMcap            ?? 150_000,
-    maxMcap:                   u.screening?.maxMcap            ?? u.maxMcap            ?? 10_000_000,
-    minBinStep:                u.screening?.minBinStep         ?? u.minBinStep         ?? 80,
+    minMcap:                   u.screening?.minMcap            ?? u.minMcap            ?? 200000,
+    maxMcap:                   u.screening?.maxMcap            ?? u.maxMcap            ?? 10000000,
+    minBinStep:                u.screening?.minBinStep         ?? u.minBinStep         ?? 50,
     maxBinStep:                u.screening?.maxBinStep         ?? u.maxBinStep         ?? 125,
     timeframe:                 u.screening?.timeframe          ?? u.timeframe          ?? "5m",
     category:                  u.screening?.category           ?? u.category           ?? "trending",
-    minTokenFeesSol:            u.screening?.minTokenFeesSol   ?? u.minTokenFeesSol   ?? 15,  // global fees paid (priority+jito tips). below = bundled/scam
+    minTokenFeesSol:            u.screening?.minTokenFeesSol   ?? u.minTokenFeesSol   ?? 20,  // global fees paid (priority+jito tips). below = bundled/scam
     useDiscordSignals:         u.screening?.useDiscordSignals  ?? u.useDiscordSignals  ?? false,
     discordSignalMode:         u.screening?.discordSignalMode  ?? u.discordSignalMode  ?? "merge", // merge | only
     avoidPvpSymbols:           u.screening?.avoidPvpSymbols    ?? u.avoidPvpSymbols    ?? true, // avoid exact-symbol rivals with real active pools
     blockPvpSymbols:           u.screening?.blockPvpSymbols    ?? u.blockPvpSymbols    ?? false, // hard-filter PVP rivals before the LLM sees them
-    maxBundlePct:              u.screening?.maxBundlePct        ?? u.maxBundlePct        ?? 35,  // max bundle holding % (OKX advanced-info)
-    maxBotHoldersPct:          u.screening?.maxBotHoldersPct   ?? u.maxBotHoldersPct   ?? 50,  // max bot holder addresses % (Jupiter audit)
-    maxTop10Pct:               u.screening?.maxTop10Pct        ?? u.maxTop10Pct        ?? 30,  // max top 10 holders concentration
+    maxBundlePct:              u.screening?.maxBundlePct        ?? u.maxBundlePct        ?? 40,  // max bundle holding % (OKX advanced-info)
+    maxBotHoldersPct:          u.screening?.maxBotHoldersPct   ?? u.maxBotHoldersPct   ?? 56,  // max bot holder addresses % (Jupiter audit)
+    maxTop10Pct:               u.screening?.maxTop10Pct        ?? u.maxTop10Pct        ?? 35,  // max top 10 holders concentration
     allowedLaunchpads:         u.screening?.allowedLaunchpads   ?? u.allowedLaunchpads   ?? [],  // allow-list launchpads, [] = no allow-list
     blockedLaunchpads:          u.screening?.blockedLaunchpads   ?? u.blockedLaunchpads   ?? [],  // e.g. ["letsbonk.fun", "pump.fun"]
     minTokenAgeHours:           u.screening?.minTokenAgeHours   ?? u.minTokenAgeHours   ?? null, // null = no minimum
     maxTokenAgeHours:           u.screening?.maxTokenAgeHours   ?? u.maxTokenAgeHours   ?? null, // null = no maximum
     athFilterPct:               u.screening?.athFilterPct        ?? u.athFilterPct        ?? null, // e.g. -20 = only deploy if price is >= 20% below ATH
-    minVolatility:             u.screening?.minVolatility       ?? u.minVolatility       ?? 1,
+    minVolatility:             u.screening?.minVolatility       ?? u.minVolatility       ?? null,
     maxVolatility:             u.screening?.maxVolatility       ?? u.maxVolatility       ?? 15,
     useVwapFilter:             u.screening?.useVwapFilter       ?? u.useVwapFilter       ?? false,  // enable/disable VWAP ATH -20% hard filter
     athDropLimit:              u.screening?.athDropLimit        ?? u.athDropLimit        ?? -20,     // % below VWAP ATH to hard reject
@@ -117,35 +117,35 @@ export const config = {
     limit: gmgnValue("limit", "gmgnLimit", 100),
     enrichLimit: gmgnValue("enrichLimit", "gmgnEnrichLimit", 20),
     requestDelayMs: gmgnValue("requestDelayMs", "gmgnRequestDelayMs", 350),
-    maxRetries: gmgnValue("maxRetries", "gmgnMaxRetries", 2),
-    maxCallsPerMinute: gmgnValue("maxCallsPerMinute", "gmgnMaxCallsPerMinute", 15),
+    maxRetries: gmgnValue("maxRetries", "gmgnMaxRetries", 5),
+    maxCallsPerMinute: gmgnValue("maxCallsPerMinute", "gmgnMaxCallsPerMinute", 5),
     holdersLimit: gmgnValue("holdersLimit", "gmgnHoldersLimit", 100),
     klineResolution: gmgnValue("klineResolution", "gmgnKlineResolution", "5m"),
     klineLookbackMinutes: gmgnValue("klineLookbackMinutes", "gmgnKlineLookbackMinutes", 60),
     filters: gmgnArray("filters", "gmgnFilters", ["renounced", "frozen", "not_wash_trading"]),
     platforms: gmgnArray("platforms", "gmgnPlatforms", ["Pump.fun", "meteora_virtual_curve", "pool_meteora"]),
-    minMcap: gmgnValue("minMcap", "gmgnMinMcap", u.minMcap ?? 150_000),
-    maxMcap: gmgnValue("maxMcap", "gmgnMaxMcap", u.maxMcap ?? 10_000_000),
-    minTvl: gmgnValue("minTvl", "gmgnMinTvl", u.minTvl ?? 10_000),
-    minVolume: gmgnValue("minVolume", "gmgnMinVolume", 1000),
-    minHolders: gmgnValue("minHolders", "gmgnMinHolders", u.minHolders ?? 500),
-    minTokenAgeHours: gmgnValue("minTokenAgeHours", "gmgnMinTokenAgeHours", 2),
+    minMcap: gmgnValue("minMcap", "gmgnMinMcap", u.minMcap ?? 200000),
+    maxMcap: gmgnValue("maxMcap", "gmgnMaxMcap", u.maxMcap ?? 10000000),
+    minTvl: gmgnValue("minTvl", "gmgnMinTvl", u.minTvl ?? 7000),
+    minVolume: gmgnValue("minVolume", "gmgnMinVolume", 5000),
+    minHolders: gmgnValue("minHolders", "gmgnMinHolders", u.minHolders ?? 200),
+    minTokenAgeHours: gmgnValue("minTokenAgeHours", "gmgnMinTokenAgeHours", 1),
     maxTokenAgeHours: gmgnValue("maxTokenAgeHours", "gmgnMaxTokenAgeHours", 24 * 7),
     minSmartDegenCount: gmgnValue("minSmartDegenCount", "gmgnMinSmartDegenCount", 1),
-    requireKol: gmgnValue("requireKol", "gmgnRequireKol", true),
+    requireKol: gmgnValue("requireKol", "gmgnRequireKol", false),
     minKolCount: gmgnValue("minKolCount", "gmgnMinKolCount", 1),
-    maxRugRatio: gmgnValue("maxRugRatio", "gmgnMaxRugRatio", 0.3),
-    maxTop10HolderRate: gmgnValue("maxTop10HolderRate", "gmgnMaxTop10HolderRate", 0.5),
-    maxBundlerRate: gmgnValue("maxBundlerRate", "gmgnMaxBundlerRate", 0.5),
+    maxRugRatio: gmgnValue("maxRugRatio", "gmgnMaxRugRatio", 0.6),
+    maxTop10HolderRate: gmgnValue("maxTop10HolderRate", "gmgnMaxTop10HolderRate", 0.35),
+    maxBundlerRate: gmgnValue("maxBundlerRate", "gmgnMaxBundlerRate", 0.4),
     maxRatTraderRate: gmgnValue("maxRatTraderRate", "gmgnMaxRatTraderRate", 0.2),
-    maxFreshWalletRate: gmgnValue("maxFreshWalletRate", "gmgnMaxFreshWalletRate", 0.2),
-    maxDevTeamHoldRate: gmgnValue("maxDevTeamHoldRate", "gmgnMaxDevTeamHoldRate", 0.02),
+    maxFreshWalletRate: gmgnValue("maxFreshWalletRate", "gmgnMaxFreshWalletRate", 0.22),
+    maxDevTeamHoldRate: gmgnValue("maxDevTeamHoldRate", "gmgnMaxDevTeamHoldRate", 0.01),
     preferredKolMinHoldPct: gmgnValue("preferredKolMinHoldPct", "gmgnPreferredKolMinHoldPct", 1),
-    dumpKolMinHoldPct: gmgnValue("dumpKolMinHoldPct", "gmgnDumpKolMinHoldPct", 0.5),
-    maxBotDegenRate: gmgnValue("maxBotDegenRate", "gmgnMaxBotDegenRate", 0.4),
-    maxSniperCount: gmgnValue("maxSniperCount", "gmgnMaxSniperCount", 20),
-    maxSniperHoldRate: gmgnValue("maxSniperHoldRate", "gmgnMaxSniperHoldRate", 0.3),
-    minTotalFeeSol: gmgnValue("minTotalFeeSol", "gmgnMinTotalFeeSol", 30),
+    dumpKolMinHoldPct: gmgnValue("dumpKolMinHoldPct", "gmgnDumpKolMinHoldPct", 1),
+    maxBotDegenRate: gmgnValue("maxBotDegenRate", "gmgnMaxBotDegenRate", 0.56),
+    maxSniperCount: gmgnValue("maxSniperCount", "gmgnMaxSniperCount", 25),
+    maxSniperHoldRate: gmgnValue("maxSniperHoldRate", "gmgnMaxSniperHoldRate", 0.2),
+    minTotalFeeSol: gmgnValue("minTotalFeeSol", "gmgnMinTotalFeeSol", 20),
     athFilterPct: gmgnValue("athFilterPct", "gmgnAthFilterPct", null),
     preferredKolNames: gmgnArray("preferredKolNames", "gmgnPreferredKolNames", []),
     dumpKolNames: gmgnArray("dumpKolNames", "gmgnDumpKolNames", []),
@@ -168,39 +168,39 @@ export const config = {
         requireBbPosition:        r.requireBbPosition        ?? null,
       };
     })(),
-    minVolatility: gmgnValue("minVolatility", "gmgnMinVolatility", 1),
+    minVolatility: gmgnValue("minVolatility", "gmgnMinVolatility", 0),
     maxVolatility: gmgnValue("maxVolatility", "gmgnMaxVolatility", 15),
   },
 
   // ─── Position Management ────────────────
   management: {
-    minClaimAmount:        u.minClaimAmount        ?? 5,
+    minClaimAmount:        u.minClaimAmount        ?? 10,
     autoSwapAfterClaim:    u.autoSwapAfterClaim    ?? true,
     outOfRangeBinsToClose: u.outOfRangeBinsToClose ?? 15,
-    outOfRangeWaitMinutes: u.outOfRangeWaitMinutes ?? 10,
+    outOfRangeWaitMinutes: u.outOfRangeWaitMinutes ?? 15,
     oorCooldownTriggerCount: u.oorCooldownTriggerCount ?? 3,
     oorCooldownHours:       u.oorCooldownHours       ?? 1,
-    repeatDeployCooldownEnabled: u.repeatDeployCooldownEnabled ?? true,
+    repeatDeployCooldownEnabled: u.repeatDeployCooldownEnabled ?? false,
     repeatDeployCooldownTriggerCount: u.repeatDeployCooldownTriggerCount ?? 3,
     repeatDeployCooldownHours: u.repeatDeployCooldownHours ?? 1,
     repeatDeployCooldownScope: u.repeatDeployCooldownScope ?? "token", // pool | token | both
     repeatDeployCooldownMinFeeEarnedPct: u.repeatDeployCooldownMinFeeEarnedPct ?? u.repeatDeployCooldownMinFeeYieldPct ?? 0,
     minVolumeToRebalance:  u.minVolumeToRebalance  ?? 1000,
-    stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
+    stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? -20,
     takeProfitPct:         u.takeProfitPct         ?? u.takeProfitFeePct ?? 8,
-    minFeePerTvl24h:       u.minFeePerTvl24h       ?? 5,
+    minFeePerTvl24h:       u.minFeePerTvl24h       ?? 1,
     minAgeBeforeYieldCheck: u.minAgeBeforeYieldCheck ?? 15, // minutes before low yield can trigger close
     minSolToOpen:          u.minSolToOpen          ?? 0.02,
-    deployAmountSol:       u.deployAmountSol       ?? 0.3,
+    deployAmountSol:       u.deployAmountSol       ?? 0.5,
     gasReserve:            u.gasReserve            ?? 0.01,
-    positionSizePct:       u.positionSizePct       ?? 0.70,
+    positionSizePct:       u.positionSizePct       ?? 0.85,
     // Trailing take-profit
     trailingTakeProfit:    u.trailingTakeProfit    ?? true,
     trailingTriggerPct:    u.trailingTriggerPct    ?? 4,    // activate trailing at X% PnL
-    trailingDropPct:       u.trailingDropPct       ?? 1.5,  // close when drops X% from peak
+    trailingDropPct:       u.trailingDropPct       ?? 0.5,  // close when drops X% from peak
     pnlSanityMaxDiffPct:   u.pnlSanityMaxDiffPct   ?? 5,    // max allowed diff between reported and derived pnl % before ignoring a tick
     // SOL mode — positions, PnL, and balances reported in SOL instead of USD
-    solMode:               u.solMode               ?? true,
+    solMode:               u.solMode               ?? false,
   },
 
   // ─── Strategy Mapping ───────────────────
@@ -212,8 +212,8 @@ export const config = {
 
   // ─── Scheduling ─────────────────────────
   schedule: {
-    managementIntervalMin:  u.managementIntervalMin  ?? 5,
-    screeningIntervalMin:   u.screeningIntervalMin   ?? 3,
+    managementIntervalMin:  u.managementIntervalMin  ?? 10,
+    screeningIntervalMin:   u.screeningIntervalMin   ?? 5,
     healthCheckIntervalMin: u.healthCheckIntervalMin ?? 60,
   },
 
@@ -230,7 +230,7 @@ export const config = {
   // ─── Darwinian Signal Weighting ───────
   darwin: {
     enabled:        u.darwinEnabled     ?? false,
-    autoEvolve:     u.autoEvolve       ?? true,  // auto-evolve thresholds every 5 closes
+    autoEvolve:     u.autoEvolve       ?? false,  // auto-evolve thresholds every 5 closes
     windowDays:     u.darwinWindowDays  ?? 60,
     recalcEvery:    u.darwinRecalcEvery ?? 5,    // recalc every N closes
     boostFactor:    u.darwinBoost       ?? 1.05,
@@ -252,7 +252,7 @@ export const config = {
     url: nonEmptyString(u.hiveMindUrl, DEFAULT_HIVEMIND_URL),
     apiKey: nonEmptyString(u.hiveMindApiKey, process.env.HIVEMIND_API_KEY),
     agentId: u.agentId ?? null,
-    pullMode: u.hiveMindPullMode ?? "auto",
+    pullMode: u.hiveMindPullMode ?? null,
   },
 
   api: {
@@ -265,7 +265,7 @@ export const config = {
     apiKey: process.env.JUPITER_API_KEY ?? "",
     referralAccount:
       process.env.JUPITER_REFERRAL_ACCOUNT ??
-      "9MzhDUnq3KxecyPzvhguQMMPbooXQ3VAoCMPDnoijwey",
+      null,
     referralFeeBps: Number(
       process.env.JUPITER_REFERRAL_FEE_BPS ?? 50,
     ),

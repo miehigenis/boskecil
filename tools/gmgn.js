@@ -652,9 +652,16 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
 
 
   // ── Stage 2: token info filter ────────────────────────────────────────────
-  const s2 = [];
+  // Whitelist tokens bypass S2 — go straight to pool discovery (S3)
+  const whitelistS2 = [];
+  const normalS2 = [];
   for (const token of s1) {
     const mint = token.address;
+    if (isWhitelisted(mint)) {
+      whitelistS2.push({ token, info: {}, infoCheck: { passed: true, reasons: [] } });
+      log("gmgn", `S2 whitelist bypass: ${token.symbol || mint}`);
+      continue;
+    }
     try {
       const infoPayload = await gmgnFetch("/v1/token/info", { params: { chain: "sol", address: mint } });
       const info = infoPayload?.data?.data || infoPayload?.data || infoPayload;
@@ -663,33 +670,43 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
         filtered.push({ stage: 2, name: token.symbol || mint, reason: infoCheck.reasons.join(", ") });
         continue;
       }
-      s2.push({ token, info, infoCheck });
+      normalS2.push({ token, info, infoCheck });
     } catch (error) {
       log("gmgn", `Stage2 skip ${token.symbol || mint}: ${error.message}`);
       filtered.push({ stage: 2, name: token.symbol || mint, reason: error.message });
     }
   }
+  const s2 = [...whitelistS2, ...normalS2];
   stageCounts.s2 = s2.length;
-  stagePassing.s2 = s2.map((entry) => ({ name: entry.token.symbol || entry.token.address, reason: "passed info filter" }));
+  stagePassing.s2 = s2.map((entry) => ({
+    name: entry.token.symbol || entry.token.address,
+    reason: isWhitelisted(entry.token.address) ? "whitelist (S2 bypassed)" : "passed info filter",
+  }));
   log("gmgn", `Stage2 info: ${s1.length} → ${s2.length} pass`);
 
   // ── Stage 3: holders/traders enrichment (no hard filter) + Meteora pool ──
+  // Whitelist tokens skip holders/traders fetch — go straight to pool discovery
   const s3 = [];
   const minTvl = num(g.minTvl ?? config.screening.minTvl ?? 0);
   for (const { token, info, infoCheck } of s2) {
     const mint = token.address;
+    const isWl = isWhitelisted(mint);
     try {
-      const [holdersPayload, tradersPayload] = await Promise.all([
-        gmgnFetch("/v1/market/token_top_holders", {
-          params: { chain: "sol", address: mint, limit: g.holdersLimit || 100, order_by: "amount_percentage", direction: "desc" },
-        }),
-        gmgnFetch("/v1/market/token_top_traders", {
-          params: { chain: "sol", address: mint, limit: g.holdersLimit || 100, order_by: "profit", direction: "desc" },
-        }),
-      ]);
-      const holders = unwrapList(holdersPayload, ["list", "holders", "data"]);
-      const traders = unwrapList(tradersPayload, ["list", "traders", "data"]);
-      const holdersCheck = analyzeHoldersAndTraders(holders, traders);
+      let holdersCheck = { passed: true, reasons: [] };
+      // Whitelist tokens skip holders/traders API calls — pool discovery only
+      if (!isWl) {
+        const [holdersPayload, tradersPayload] = await Promise.all([
+          gmgnFetch("/v1/market/token_top_holders", {
+            params: { chain: "sol", address: mint, limit: g.holdersLimit || 100, order_by: "amount_percentage", direction: "desc" },
+          }),
+          gmgnFetch("/v1/market/token_top_traders", {
+            params: { chain: "sol", address: mint, limit: g.holdersLimit || 100, order_by: "profit", direction: "desc" },
+          }),
+        ]);
+        const holders = unwrapList(holdersPayload, ["list", "holders", "data"]);
+        const traders = unwrapList(tradersPayload, ["list", "traders", "data"]);
+        holdersCheck = analyzeHoldersAndTraders(holders, traders);
+      }
 
       const topPools = await fetchTopMeteoraDlmmPoolsForMint(mint, minTvl, 2);
       if (topPools.length === 0) {
@@ -703,7 +720,10 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
     }
   }
   stageCounts.s3 = s3.length;
-  stagePassing.s3 = s3.map((entry) => ({ name: entry.token.symbol || entry.token.address, reason: "found Meteora pool" }));
+  stagePassing.s3 = s3.map((entry) => ({
+    name: entry.token.symbol || entry.token.address,
+    reason: isWhitelisted(entry.token.address) ? "whitelist (pool only)" : "found Meteora pool",
+  }));
   log("gmgn", `Stage3 pool: ${s2.length} → ${s3.length} pass`);
 
   // ── Stage 4: Meridian chart indicators ────────────────────────────────────

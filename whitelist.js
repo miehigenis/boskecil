@@ -2,11 +2,16 @@
  * Token Whitelist — priority list for the screener.
  *
  * - Tokens in the whitelist are PRIORITY: screener always attempts to deploy into them.
- * - GMGN S1 rank filter is BYPASSED for whitelist tokens (only S2+ filters apply).
+ * - GMGN S1 rank filter is BYPASSED for whitelist tokens.
+ * - GMGN S2 token info filter is BYPASSED for whitelist tokens (only S3+ filters apply).
  * - Pool-memory cooldowns are BYPASSED for whitelist tokens (blacklist is NOT bypassed).
  * - Entry indicators (checkBounceSetup / Stage4) STILL APPLY — can't override those.
  * - Deterministic exit rules STILL APPLY — can't override those.
- * - User-config parameters (S2+) can still reject whitelist tokens.
+ * - User-config parameters (S3+) can still reject whitelist tokens.
+ *
+ * Whitelist flow for whitelisted tokens:
+ *   S1: bypass (rank filter) → S2: bypass (info filter) → S3: pool only (no holders/traders fetch)
+ *   → S4: indicators (fail-closed) → S5: pool selection + volatility → DEPLOY
  *
  * Tokens auto-expire after whitelistTtlHours (default 6h).
  * Persisted to whitelist.json.
