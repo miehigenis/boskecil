@@ -241,7 +241,7 @@ export const config = {
   // ─── HiveMind ─────────────────────────
   hiveMind: {
     url: nonEmptyString(u.hiveMindUrl, DEFAULT_HIVEMIND_URL),
-    apiKey: nonEmptyString(u.hiveMindApiKey, process.env.HIVEMIND_API_KEY, DEFAULT_HIVEMIND_API_KEY),
+    apiKey: nonEmptyString(u.hiveMindApiKey, process.env.HIVEMIND_API_KEY),
     agentId: u.agentId ?? null,
     pullMode: u.hiveMindPullMode ?? "auto",
   },

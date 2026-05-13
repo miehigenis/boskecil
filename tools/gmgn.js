@@ -501,7 +501,7 @@ function condenseGmgnCandidate({ token, pool, poolDetail, security, info, infoAn
 // Token dumps down through bins (fees collected) then bounces back up (more fees).
 // Need: (1) token not already at bottom — needs room to dump into range,
 //        (2) overall bullish trend — guarantees the bounce back.
-async function checkBounceSetup(mint) {
+export async function checkBounceSetup(mint) {
   const interval = String(config.gmgn.indicatorInterval || "15_MINUTE").trim().toUpperCase();
   const payload = await fetchChartIndicatorsForMint(mint, { interval });
   const latest = payload?.latest || {};
