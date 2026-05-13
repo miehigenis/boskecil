@@ -633,8 +633,9 @@ async function runSafetyChecks(name, args) {
       // Fetch real volatility AND bin_step from Meteora's Pool Discovery API — do NOT trust args
       let realVolatility = null;
       let realBinStep = args.bin_step; // default to LLM-provided, override if Meteora has it
+      let poolDetail = null;
       try {
-        const poolDetail = await getPoolDetail({ pool_address: args.pool_address, timeframe: "5m" });
+        poolDetail = await getPoolDetail({ pool_address: args.pool_address, timeframe: "5m" });
         realVolatility = poolDetail?.volatility != null ? Number(poolDetail.volatility) : null;
         if (poolDetail?.bin_step != null) {
           realBinStep = Number(poolDetail.bin_step);
