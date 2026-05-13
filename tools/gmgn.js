@@ -501,71 +501,106 @@ function condenseGmgnCandidate({ token, pool, poolDetail, security, info, infoAn
 // Token dumps down through bins (fees collected) then bounces back up (more fees).
 // Need: (1) token not already at bottom — needs room to dump into range,
 //        (2) overall bullish trend — guarantees the bounce back.
+//
+// Multi-timeframe support:
+//   indicatorIntervals = list of TFs to check (e.g. ["1_MINUTE","5_MINUTE","15_MINUTE"])
+//   indicatorMultiTfMode = "any" (≥1 pass) | "all" (all pass) | "majority" (>50% pass)
+//   Backward compatible: if indicatorIntervals has 1 item, behaves like before.
 export async function checkBounceSetup(mint) {
-  const interval = String(config.gmgn.indicatorInterval || "15_MINUTE").trim().toUpperCase();
-  const payload = await fetchChartIndicatorsForMint(mint, { interval });
-  const latest = payload?.latest || {};
-  const st = latest?.supertrend || {};
-  const stValue = Number(st.value) || 0;
-  const stDirection = String(st.direction || "").toLowerCase();
-  const stBreakUp = !!latest?.states?.supertrendBreakUp;
-  const close = Number(latest?.candle?.close) || 0;
-  const rsiValue = Number(latest?.rsi?.value);
-  const bb = latest?.bollinger || {};
-  const upperBand = Number(bb.upper) || 0;
-  const lowerBand = Number(bb.lower) || 0;
-  const oversold = Number(config.indicators?.rsiOversold ?? 35);
+  const g = config.gmgn;
+  const intervals = g.indicatorIntervals || [g.indicatorInterval || "15_MINUTE"];
+  const mode = g.indicatorMultiTfMode || "any";
 
-  const isBullish = stDirection === "bullish" || stBreakUp;
-  const alreadyAtBottom =
-    Number.isFinite(rsiValue) && rsiValue < oversold &&
-    close > 0 && lowerBand > 0 && close < lowerBand;
-  const priceAboveSupertrend = close > 0 && stValue > 0 && close >= stValue;
+  // Run per-TF checks
+  const tfResults = [];
+  for (const interval of intervals) {
+    const payload = await fetchChartIndicatorsForMint(mint, { interval });
+    const latest = payload?.latest || {};
+    const st = latest?.supertrend || {};
+    const stValue = Number(st.value) || 0;
+    const stDirection = String(st.direction || "").toLowerCase();
+    const stBreakUp = !!latest?.states?.supertrendBreakUp;
+    const close = Number(latest?.candle?.close) || 0;
+    const rsiValue = Number(latest?.rsi?.value);
+    const bb = latest?.bollinger || {};
+    const upperBand = Number(bb.upper) || 0;
+    const lowerBand = Number(bb.lower) || 0;
+    const oversold = Number(config.indicators?.rsiOversold ?? 35);
 
-  let bbPosition = "inside";
-  if (close > 0 && upperBand > 0 && close > upperBand) bbPosition = "above";
-  else if (close > 0 && lowerBand > 0 && close < lowerBand) bbPosition = "below";
+    const isBullish = stDirection === "bullish" || stBreakUp;
+    const alreadyAtBottom =
+      Number.isFinite(rsiValue) && rsiValue < oversold &&
+      close > 0 && lowerBand > 0 && close < lowerBand;
+    const priceAboveSupertrend = close > 0 && stValue > 0 && close >= stValue;
 
-  let rsiLabel = null;
-  if (Number.isFinite(rsiValue)) {
-    if (rsiValue < 35) rsiLabel = "oversold";
-    else if (rsiValue > 65) rsiLabel = "overbought";
-    else rsiLabel = "neutral";
+    let bbPosition = "inside";
+    if (close > 0 && upperBand > 0 && close > upperBand) bbPosition = "above";
+    else if (close > 0 && lowerBand > 0 && close < lowerBand) bbPosition = "below";
+
+    const rules = g.indicatorRules || {};
+    const reasons = [];
+
+    if (rules.requireBullishSupertrend !== false && !isBullish)
+      reasons.push(`no bounce support: ${stDirection} supertrend`);
+
+    if (rules.rejectAlreadyAtBottom !== false && alreadyAtBottom)
+      reasons.push(`already at bottom: RSI ${rsiValue.toFixed(1)}, price below lower BB`);
+
+    if (rules.requireAboveSupertrend && !priceAboveSupertrend)
+      reasons.push(`price below supertrend (${stValue})`);
+
+    if (rules.minRsi != null && Number.isFinite(rsiValue) && rsiValue < rules.minRsi)
+      reasons.push(`RSI ${rsiValue.toFixed(1)} < min ${rules.minRsi}`);
+
+    if (rules.maxRsi != null && Number.isFinite(rsiValue) && rsiValue > rules.maxRsi)
+      reasons.push(`RSI ${rsiValue.toFixed(1)} > max ${rules.maxRsi}`);
+
+    if (rules.requireBbPosition != null && bbPosition !== rules.requireBbPosition)
+      reasons.push(`BB position ${bbPosition} ≠ required ${rules.requireBbPosition}`);
+
+    tfResults.push({
+      interval,
+      passed: reasons.length === 0,
+      reasons,
+      signal: {
+        interval,
+        rsi: Number.isFinite(rsiValue) ? Number(rsiValue.toFixed(1)) : null,
+        rsiLabel: Number.isFinite(rsiValue)
+          ? (rsiValue < 35 ? "oversold" : rsiValue > 65 ? "overbought" : "neutral")
+          : null,
+        bbPosition,
+        supertrendDirection: stDirection || null,
+        supertrendBreakUp: stBreakUp,
+        aboveSupertrend: close > 0 && stValue > 0 ? close >= stValue : null,
+      },
+    });
   }
 
-  const rules = config.gmgn.indicatorRules || {};
-  const reasons = [];
+  // Aggregate per mode
+  const passedCount = tfResults.filter(r => r.passed).length;
+  const total = tfResults.length;
+  let finalPass = false;
 
-  if (rules.requireBullishSupertrend !== false && !isBullish)
-    reasons.push(`no bounce support: ${stDirection} supertrend`);
+  if (mode === "any") {
+    finalPass = passedCount >= 1;
+  } else if (mode === "all") {
+    finalPass = passedCount === total;
+  } else if (mode === "majority") {
+    finalPass = passedCount > total / 2;
+  }
 
-  if (rules.rejectAlreadyAtBottom !== false && alreadyAtBottom)
-    reasons.push(`already at bottom: RSI ${rsiValue.toFixed(1)}, price below lower BB — dump done`);
+  // Collect all failure reasons (deduped)
+  const allReasons = [...new Set(tfResults.flatMap(r => r.passed ? [] : r.reasons))];
 
-  if (rules.requireAboveSupertrend && !priceAboveSupertrend)
-    reasons.push(`price below supertrend (${stValue})`);
-
-  if (rules.minRsi != null && Number.isFinite(rsiValue) && rsiValue < rules.minRsi)
-    reasons.push(`RSI ${rsiValue.toFixed(1)} < min ${rules.minRsi}`);
-
-  if (rules.maxRsi != null && Number.isFinite(rsiValue) && rsiValue > rules.maxRsi)
-    reasons.push(`RSI ${rsiValue.toFixed(1)} > max ${rules.maxRsi}`);
-
-  if (rules.requireBbPosition != null && bbPosition !== rules.requireBbPosition)
-    reasons.push(`BB position ${bbPosition} ≠ required ${rules.requireBbPosition}`);
+  // Primary signal = first passing TF (or first TF if none pass)
+  const primarySignal = tfResults.find(r => r.passed)?.signal ?? tfResults[0]?.signal ?? null;
 
   return {
-    passed: reasons.length === 0,
-    reasons,
-    signal: {
-      interval,
-      rsi: Number.isFinite(rsiValue) ? Number(rsiValue.toFixed(1)) : null,
-      rsiLabel,
-      bbPosition,
-      supertrendDirection: stDirection || null,
-      supertrendBreakUp: stBreakUp,
-      aboveSupertrend: close > 0 && stValue > 0 ? close >= stValue : null,
-    },
+    passed: finalPass,
+    reasons: allReasons,
+    signal: primarySignal,
+    tfBreakdown: tfResults,
+    mode,
   };
 }
 

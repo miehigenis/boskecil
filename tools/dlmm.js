@@ -686,7 +686,7 @@ export async function deployPosition({
   // Reduce bins_below step-by-step until range fits within already-initialized bin arrays.
   // Avoids non-refundable bin-array rent when deploying into a wide uninitialized range.
   const originalBinsBelow = activeBinsBelow;
-  const floorBinsBelow = actualBinStep === 80 ? 131 : actualBinStep === 100 ? 105 : actualBinStep === 125 ? 85 : (config.strategy.minBinsBelow ?? 69);
+      const floorBinsBelow = actualBinStep === 50 ? 139 : actualBinStep === 80 ? 131 : actualBinStep === 100 ? 105 : actualBinStep === 125 ? 85 : (config.strategy.minBinsBelow ?? 69);
   const BIN_REDUCE_STEP = 10;
   while (true) {
     try {

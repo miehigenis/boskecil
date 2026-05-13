@@ -1086,12 +1086,20 @@ function buildCandidateDetailsReport(candidates = []) {
   return `<b>📊 Candidate Details:</b>\n${lines.join("\n")}`;
 }
 
+// Drawdown formula: 1 - (1 + binStep/10000)^-binsBelow = downside coverage %
+//
+// bin_step 50:  lo=139 → -50%   (vol=0 flat)   /  hi=380 → -85%   (vol=5 max)
+// bin_step 80:  lo=131 → -65%   (vol=0 flat)   /  hi=289 → -90%   (vol=5 max)
+// bin_step 100: lo=105 → -65%   (vol=0 flat)   /  hi=231 → -90%   (vol=5 max)
+// bin_step 125: lo=85  → -65%   (vol=0 flat)   /  hi=185 → -90%   (vol=5 max)
+// fallback (other): minBinsBelow → -65% floor / maxBinsBelow → -90% ceiling
 function computeBinsBelow(volatility, binStep = null) {
   let lo = config.strategy.minBinsBelow;
   let hi = config.strategy.maxBinsBelow; // fallback
-  if (binStep === 80)  { lo = 131;  hi = 205; }
-  else if (binStep === 100) { lo = 105; hi = 161; }
-  else if (binStep === 125) { lo = 85;  hi = 130; }
+  if (binStep === 50)  { lo = 139;  hi = 380; }
+  else if (binStep === 80)  { lo = 131;  hi = 289; }
+  else if (binStep === 100) { lo = 105; hi = 231; }
+  else if (binStep === 125) { lo = 85;  hi = 185; }
   return Math.max(lo, Math.min(hi, Math.round(lo + ((Number(volatility) || 0) / 5) * (hi - lo))));
 }
 

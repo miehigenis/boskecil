@@ -68,40 +68,43 @@ export const config = {
   },
 
   // ─── Pool Screening Thresholds ───────────
+  // NOTE: All keys read from u.screening?.xxx first (nested), then u.xxx (top-level),
+  // then hardcoded default. user-config.json places most screening keys inside a
+  // "screening" sub-object — this dual-read ensures both layouts are supported.
   screening: {
-    source:            u.screening?.source ?? u.screeningSource ?? "meteora", // meteora | gmgn
-    excludeHighSupplyConcentration: u.excludeHighSupplyConcentration ?? true,
-    minFeeActiveTvlRatio: u.minFeeActiveTvlRatio ?? 0.05,
-    minTvl:            u.minTvl            ?? 10_000,
-    maxTvl:            u.maxTvl !== undefined ? u.maxTvl : 150_000,
-    minVolume:         u.minVolume         ?? 1000,
-    minOrganic:        u.minOrganic        ?? 64,
-    minQuoteOrganic:   u.minQuoteOrganic   ?? 60,
-    minHolders:        u.minHolders        ?? 100,
-    minMcap:           u.minMcap           ?? 150_000,
-    maxMcap:           u.maxMcap           ?? 10_000_000,
-    minBinStep:        u.minBinStep        ?? 80,
-    maxBinStep:        u.maxBinStep        ?? 125,
-    timeframe:         u.timeframe         ?? "5m",
-    category:          u.category          ?? "trending",
-    minTokenFeesSol:   u.minTokenFeesSol   ?? 15,  // global fees paid (priority+jito tips). below = bundled/scam
-    useDiscordSignals: u.useDiscordSignals ?? false,
-    discordSignalMode: u.discordSignalMode ?? "merge", // merge | only
-    avoidPvpSymbols:   u.avoidPvpSymbols   ?? true, // avoid exact-symbol rivals with real active pools
-    blockPvpSymbols:   u.blockPvpSymbols   ?? false, // hard-filter PVP rivals before the LLM sees them
-    maxBundlePct:      u.maxBundlePct      ?? 35,  // max bundle holding % (OKX advanced-info)
-    maxBotHoldersPct:  u.maxBotHoldersPct  ?? 50,  // max bot holder addresses % (Jupiter audit)
-    maxTop10Pct:       u.maxTop10Pct       ?? 30,  // max top 10 holders concentration
-    allowedLaunchpads: u.allowedLaunchpads ?? [],  // allow-list launchpads, [] = no allow-list
-    blockedLaunchpads:  u.blockedLaunchpads  ?? [],  // e.g. ["letsbonk.fun", "pump.fun"]
-    minTokenAgeHours:   u.minTokenAgeHours   ?? null, // null = no minimum
-    maxTokenAgeHours:   u.maxTokenAgeHours   ?? null, // null = no maximum
-    athFilterPct:       u.athFilterPct       ?? null, // e.g. -20 = only deploy if price is >= 20% below ATH
-    minVolatility:      u.minVolatility      ?? 1,
-    maxVolatility:      u.maxVolatility      ?? 15,
-    useVwapFilter:      u.useVwapFilter      ?? false,  // enable/disable VWAP ATH -20% hard filter
-    athDropLimit:       u.athDropLimit       ?? -20,     // % below VWAP ATH to hard reject
-    whitelistTtlHours: u.whitelistTtlHours  ?? 6,       // auto-expiry for whitelist entries (hours)
+    source:                   u.screening?.source            ?? u.screeningSource            ?? "meteora", // meteora | gmgn
+    excludeHighSupplyConcentration: u.screening?.excludeHighSupplyConcentration ?? u.excludeHighSupplyConcentration ?? true,
+    minFeeActiveTvlRatio:      u.screening?.minFeeActiveTvlRatio  ?? u.minFeeActiveTvlRatio  ?? 0.05,
+    minTvl:                    u.screening?.minTvl             ?? u.minTvl             ?? 10_000,
+    maxTvl:                    u.screening?.maxTvl !== undefined ? (u.screening?.maxTvl ?? u.maxTvl) : 150_000,
+    minVolume:                 u.screening?.minVolume          ?? u.minVolume          ?? 1000,
+    minOrganic:                u.screening?.minOrganic          ?? u.minOrganic          ?? 64,
+    minQuoteOrganic:           u.screening?.minQuoteOrganic    ?? u.minQuoteOrganic    ?? 60,
+    minHolders:                u.screening?.minHolders         ?? u.minHolders         ?? 100,
+    minMcap:                   u.screening?.minMcap            ?? u.minMcap            ?? 150_000,
+    maxMcap:                   u.screening?.maxMcap            ?? u.maxMcap            ?? 10_000_000,
+    minBinStep:                u.screening?.minBinStep         ?? u.minBinStep         ?? 80,
+    maxBinStep:                u.screening?.maxBinStep         ?? u.maxBinStep         ?? 125,
+    timeframe:                 u.screening?.timeframe          ?? u.timeframe          ?? "5m",
+    category:                  u.screening?.category           ?? u.category           ?? "trending",
+    minTokenFeesSol:            u.screening?.minTokenFeesSol   ?? u.minTokenFeesSol   ?? 15,  // global fees paid (priority+jito tips). below = bundled/scam
+    useDiscordSignals:         u.screening?.useDiscordSignals  ?? u.useDiscordSignals  ?? false,
+    discordSignalMode:         u.screening?.discordSignalMode  ?? u.discordSignalMode  ?? "merge", // merge | only
+    avoidPvpSymbols:           u.screening?.avoidPvpSymbols    ?? u.avoidPvpSymbols    ?? true, // avoid exact-symbol rivals with real active pools
+    blockPvpSymbols:           u.screening?.blockPvpSymbols    ?? u.blockPvpSymbols    ?? false, // hard-filter PVP rivals before the LLM sees them
+    maxBundlePct:              u.screening?.maxBundlePct        ?? u.maxBundlePct        ?? 35,  // max bundle holding % (OKX advanced-info)
+    maxBotHoldersPct:          u.screening?.maxBotHoldersPct   ?? u.maxBotHoldersPct   ?? 50,  // max bot holder addresses % (Jupiter audit)
+    maxTop10Pct:               u.screening?.maxTop10Pct        ?? u.maxTop10Pct        ?? 30,  // max top 10 holders concentration
+    allowedLaunchpads:         u.screening?.allowedLaunchpads   ?? u.allowedLaunchpads   ?? [],  // allow-list launchpads, [] = no allow-list
+    blockedLaunchpads:          u.screening?.blockedLaunchpads   ?? u.blockedLaunchpads   ?? [],  // e.g. ["letsbonk.fun", "pump.fun"]
+    minTokenAgeHours:           u.screening?.minTokenAgeHours   ?? u.minTokenAgeHours   ?? null, // null = no minimum
+    maxTokenAgeHours:           u.screening?.maxTokenAgeHours   ?? u.maxTokenAgeHours   ?? null, // null = no maximum
+    athFilterPct:               u.screening?.athFilterPct        ?? u.athFilterPct        ?? null, // e.g. -20 = only deploy if price is >= 20% below ATH
+    minVolatility:             u.screening?.minVolatility       ?? u.minVolatility       ?? 1,
+    maxVolatility:             u.screening?.maxVolatility       ?? u.maxVolatility       ?? 15,
+    useVwapFilter:             u.screening?.useVwapFilter       ?? u.useVwapFilter       ?? false,  // enable/disable VWAP ATH -20% hard filter
+    athDropLimit:              u.screening?.athDropLimit        ?? u.athDropLimit        ?? -20,     // % below VWAP ATH to hard reject
+    whitelistTtlHours:        u.screening?.whitelistTtlHours   ?? u.whitelistTtlHours   ?? 6,       // auto-expiry for whitelist entries (hours)
   },
 
   gmgn: {
@@ -148,6 +151,12 @@ export const config = {
     dumpKolNames: gmgnArray("dumpKolNames", "gmgnDumpKolNames", []),
     indicatorFilter: gmgnValue("indicatorFilter", "gmgnIndicatorFilter", true),
     indicatorInterval: gmgnValue("indicatorInterval", "gmgnIndicatorInterval", "15_MINUTE"),
+    indicatorIntervals: (() => {
+      const raw = gmgnUserConfig.indicatorIntervals ?? u.gmgnIndicatorIntervals;
+      if (Array.isArray(raw) && raw.length > 0) return raw;
+      return [gmgnUserConfig.indicatorInterval || "15_MINUTE"]; // fallback to single
+    })(),
+    indicatorMultiTfMode: gmgnValue("indicatorMultiTfMode", "gmgnIndicatorMultiTfMode", "any"),
     indicatorRules: (() => {
       const r = gmgnUserConfig.indicatorRules || {};
       return {
@@ -313,35 +322,39 @@ export function reloadScreeningThresholds() {
   try {
     const fresh = readJsonIfExists(USER_CONFIG_PATH);
     const s = config.screening;
-    if (fresh.screening?.source != null) s.source = fresh.screening.source;
+    // Support both top-level and nested screening object layouts
+    const src = (key) => fresh.screening?.[key] ?? fresh[key];
+
+    if (src("source") != null) s.source = src("source");
     else if (fresh.screeningSource != null) s.source = fresh.screeningSource;
-    if (fresh.minFeeActiveTvlRatio != null) s.minFeeActiveTvlRatio = fresh.minFeeActiveTvlRatio;
-    if (fresh.useDiscordSignals !== undefined) s.useDiscordSignals = fresh.useDiscordSignals;
-    if (fresh.discordSignalMode != null) s.discordSignalMode = fresh.discordSignalMode;
-    if (fresh.excludeHighSupplyConcentration !== undefined) s.excludeHighSupplyConcentration = fresh.excludeHighSupplyConcentration;
-    if (fresh.minOrganic     != null) s.minOrganic     = fresh.minOrganic;
-    if (fresh.minQuoteOrganic != null) s.minQuoteOrganic = fresh.minQuoteOrganic;
-    if (fresh.minHolders     != null) s.minHolders     = fresh.minHolders;
-    if (fresh.minMcap        != null) s.minMcap        = fresh.minMcap;
-    if (fresh.maxMcap        != null) s.maxMcap        = fresh.maxMcap;
-    if (fresh.minTvl         != null) s.minTvl         = fresh.minTvl;
-    if (fresh.maxTvl         !== undefined) s.maxTvl   = fresh.maxTvl;
-    if (fresh.minVolume      != null) s.minVolume      = fresh.minVolume;
-    if (fresh.minBinStep     != null) s.minBinStep     = fresh.minBinStep;
-    if (fresh.maxBinStep     != null) s.maxBinStep     = fresh.maxBinStep;
-    if (fresh.timeframe         != null) s.timeframe         = fresh.timeframe;
-    if (fresh.category          != null) s.category          = fresh.category;
-    if (fresh.minTokenAgeHours  !== undefined) s.minTokenAgeHours = fresh.minTokenAgeHours;
-    if (fresh.maxTokenAgeHours  !== undefined) s.maxTokenAgeHours = fresh.maxTokenAgeHours;
-    if (fresh.athFilterPct      !== undefined) s.athFilterPct     = fresh.athFilterPct;
-    if (fresh.maxBundlePct      != null) s.maxBundlePct     = fresh.maxBundlePct;
-    if (fresh.avoidPvpSymbols   !== undefined) s.avoidPvpSymbols = fresh.avoidPvpSymbols;
-    if (fresh.blockPvpSymbols   !== undefined) s.blockPvpSymbols = fresh.blockPvpSymbols;
-    if (fresh.maxBotHoldersPct  != null) s.maxBotHoldersPct = fresh.maxBotHoldersPct;
-    if (fresh.allowedLaunchpads !== undefined) s.allowedLaunchpads = fresh.allowedLaunchpads;
-    if (fresh.blockedLaunchpads !== undefined) s.blockedLaunchpads = fresh.blockedLaunchpads;
-    if (fresh.minVolatility   !== undefined) s.minVolatility   = fresh.minVolatility;
-    if (fresh.maxVolatility   !== undefined) s.maxVolatility   = fresh.maxVolatility;
+    if (src("minFeeActiveTvlRatio") != null) s.minFeeActiveTvlRatio = src("minFeeActiveTvlRatio");
+    if (src("useDiscordSignals") !== undefined) s.useDiscordSignals = src("useDiscordSignals");
+    if (src("discordSignalMode") != null) s.discordSignalMode = src("discordSignalMode");
+    if (src("excludeHighSupplyConcentration") !== undefined) s.excludeHighSupplyConcentration = src("excludeHighSupplyConcentration");
+    if (src("minOrganic") != null) s.minOrganic = src("minOrganic");
+    if (src("minQuoteOrganic") != null) s.minQuoteOrganic = src("minQuoteOrganic");
+    if (src("minHolders") != null) s.minHolders = src("minHolders");
+    if (src("minMcap") != null) s.minMcap = src("minMcap");
+    if (src("maxMcap") != null) s.maxMcap = src("maxMcap");
+    if (src("minTvl") != null) s.minTvl = src("minTvl");
+    if (src("maxTvl") !== undefined) s.maxTvl = src("maxTvl");
+    if (src("minVolume") != null) s.minVolume = src("minVolume");
+    if (src("minBinStep") != null) s.minBinStep = src("minBinStep");
+    if (src("maxBinStep") != null) s.maxBinStep = src("maxBinStep");
+    if (src("timeframe") != null) s.timeframe = src("timeframe");
+    if (src("category") != null) s.category = src("category");
+    if (src("minTokenAgeHours") !== undefined) s.minTokenAgeHours = src("minTokenAgeHours");
+    if (src("maxTokenAgeHours") !== undefined) s.maxTokenAgeHours = src("maxTokenAgeHours");
+    if (src("athFilterPct") !== undefined) s.athFilterPct = src("athFilterPct");
+    if (src("maxBundlePct") != null) s.maxBundlePct = src("maxBundlePct");
+    if (src("avoidPvpSymbols") !== undefined) s.avoidPvpSymbols = src("avoidPvpSymbols");
+    if (src("blockPvpSymbols") !== undefined) s.blockPvpSymbols = src("blockPvpSymbols");
+    if (src("maxBotHoldersPct") != null) s.maxBotHoldersPct = src("maxBotHoldersPct");
+    if (src("maxTop10Pct") != null) s.maxTop10Pct = src("maxTop10Pct");
+    if (src("allowedLaunchpads") !== undefined) s.allowedLaunchpads = src("allowedLaunchpads");
+    if (src("blockedLaunchpads") !== undefined) s.blockedLaunchpads = src("blockedLaunchpads");
+    if (src("minVolatility") !== undefined) s.minVolatility = src("minVolatility");
+    if (src("maxVolatility") !== undefined) s.maxVolatility = src("maxVolatility");
   } catch { /* ignore */ }
   try {
     const freshGmgn = readJsonIfExists(GMGN_CONFIG_PATH);
