@@ -10,6 +10,7 @@
 
 import fs from "fs";
 import { log } from "./logger.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 
 const STATE_FILE = "./state.json";
 
@@ -119,6 +120,7 @@ export function markOutOfRange(position_address) {
   if (!pos) return;
   if (!pos.out_of_range_since) {
     pos.out_of_range_since = new Date().toISOString();
+    if (!pos.first_oor_at) pos.first_oor_at = new Date().toISOString();
     save(state);
     log("state", `Position ${position_address} marked out of range`);
   }
@@ -522,6 +524,31 @@ export async function syncOpenPositions(active_addresses) {
       continue;
     }
 
+    // ── Verify before auto-close ───────────────────────────────────────────────
+    // Meteora API can have indexing lag → false positive when position is actually live.
+    // Only auto-close if on-chain confirmation shows position account doesn't exist.
+    // Also skip auto-close if position ever went OOR (tracked reliably on-chain).
+    if (pos.first_oor_at) {
+      // Position went OOR at some point → it's real and tracked on-chain → never auto-close
+      log("state", `Position ${posId} has OOR history (${pos.first_oor_at}) — skipping auto-close`);
+      continue;
+    }
+    let onChainExists = false;
+    try {
+      const conn = new Connection(process.env.RPC_URL, "confirmed");
+      const info = await conn.getParsedAccountInfo(new PublicKey(posId));
+      onChainExists = info.value !== null;
+    } catch (_) {
+      // If we can't verify, be conservative and don't auto-close
+      log("state", `Position ${posId} — could not verify on-chain existence, skipping auto-close`);
+      continue;
+    }
+    if (onChainExists) {
+      // Position exists on-chain → Meteora API was lagging, keep it tracked
+      log("state", `Position ${posId} exists on-chain (Meteora lag suspected) — keeping tracked`);
+      continue;
+    }
+    // Position confirmed absent on-chain → auto-close
     pos.closed = true;
     pos.closed_at = new Date().toISOString();
     pos.notes.push(`Auto-closed during state sync (not found on-chain)`);
