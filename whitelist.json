@@ -1,16 +1,3 @@
 {
-  "tokens": {
-    "6aztCndC8EZwD9KmHjL2WWezCx1ZhQnavLG3ZrEtpump": {
-      "addedAt": 1778658298641,
-      "expiresAt": 1778679898641,
-      "addedBy": "telegram:undefined",
-      "note": null
-    },
-    "4bCcwHAANr5dntJQmmZVqre6kxggchiuJRYiybBVpump": {
-      "addedAt": 1778672404143,
-      "expiresAt": 1778694004143,
-      "addedBy": "telegram:undefined",
-      "note": null
-    }
-  }
+  "tokens": {}
 }

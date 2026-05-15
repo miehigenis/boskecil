@@ -670,7 +670,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
           : null;
         block = [
           `POOL: ${pool.name} (${pool.pool})`,
-          `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.active_tvl}, volatility=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
+          `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.active_tvl}, volatility_${pool.volatility_timeframe || "30m"}=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
           `  audit: top10=${top10Pct}%, bots=${botPct}%, fees=${feesSol}SOL${launchpad ? `, launchpad=${launchpad}` : ""}`,
           gmgnPriceLine,
           pvpLine,
@@ -728,6 +728,7 @@ STEPS:
    strategy = ${config.strategy.strategy} (always use this, never change it).
    bins_below = round(${config.strategy.minBinsBelow} + (volatility/5)*${config.strategy.maxBinsBelow - config.strategy.minBinsBelow}) clamped to [${config.strategy.minBinsBelow},${config.strategy.maxBinsBelow}].
    bins_above = 0. Single-side SOL only: set amount_y, keep amount_x = 0.
+   pass deploy_position.volatility = the candidate volatility value.
 4. Report in this exact format (no tables, no extra sections):
    🚀 <b>DEPLOYED</b>
 
@@ -942,11 +943,43 @@ Summarize the current portfolio health, total fees earned, and performance of al
 // ═══════════════════════════════════════════
 //  GRACEFUL SHUTDOWN
 // ═══════════════════════════════════════════
+let _shuttingDown = false;
+
+function withTimeout(promise, ms) {
+  let timer = null;
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(null), ms);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 async function shutdown(signal) {
+  if (_shuttingDown) {
+    log("shutdown", `Received ${signal} while shutdown is already in progress.`);
+    return;
+  }
+  _shuttingDown = true;
+
   log("shutdown", `Received ${signal}. Shutting down...`);
   stopPolling();
-  const positions = await getMyPositions();
-  log("shutdown", `Open positions at shutdown: ${positions.total_positions}`);
+  stopCronJobs();
+
+  const positions = await withTimeout(
+    getMyPositions({ force: true, silent: true }).catch((error) => {
+      log("shutdown", `Position snapshot failed during shutdown: ${error.message}`);
+      return null;
+    }),
+    5000
+  );
+  if (positions) {
+    log("shutdown", `Open positions at shutdown: ${positions.total_positions}`);
+  } else {
+    log("shutdown", "Open position snapshot skipped during shutdown timeout");
+  }
   process.exit(0);
 }
 

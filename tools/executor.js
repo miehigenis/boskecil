@@ -51,6 +51,25 @@ function redactAppliedConfig(applied) {
   );
 }
 
+const MIN_VOLATILITY_TIMEFRAME = "30m";
+const TIMEFRAME_MINUTES = {
+  "5m": 5,
+  "15m": 15,
+  "30m": 30,
+  "1h": 60,
+  "2h": 120,
+  "4h": 240,
+  "12h": 720,
+  "24h": 1440,
+};
+
+function getVolatilityTimeframe(sourceTimeframe) {
+  const source = String(sourceTimeframe || "").trim();
+  const sourceMinutes = TIMEFRAME_MINUTES[source];
+  const minMinutes = TIMEFRAME_MINUTES[MIN_VOLATILITY_TIMEFRAME];
+  return sourceMinutes != null && sourceMinutes >= minMinutes ? source : MIN_VOLATILITY_TIMEFRAME;
+}
+
 // Registered by index.js so update_config can restart cron jobs when intervals change
 let _cronRestarter = null;
 export function registerCronRestarter(fn) { _cronRestarter = fn; }
@@ -92,15 +111,20 @@ const toolMap = {
       }
       // Delay restart so this tool response (and Telegram message) gets sent first
       setTimeout(() => {
-        const child = spawn(process.execPath, process.argv.slice(1), {
-          detached: true,
-          stdio: "inherit",
-          cwd: process.cwd(),
-        });
-        child.unref();
+        if (!process.env.pm_id) {
+          const child = spawn(process.execPath, process.argv.slice(1), {
+            detached: true,
+            stdio: "inherit",
+            cwd: process.cwd(),
+          });
+          child.unref();
+        }
         process.exit(0);
       }, 3000);
-      return { success: true, updated: true, message: `Updated! Restarting in 3s...\n${result}` };
+      const restartMode = process.env.pm_id
+        ? "PM2 detected — exiting in 3s so PM2 can restart the managed process."
+        : "Restarting in 3s...";
+      return { success: true, updated: true, message: `Updated! ${restartMode}\n${result}` };
     } catch (e) {
       return { success: false, error: e.message };
     }
