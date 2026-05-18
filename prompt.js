@@ -128,6 +128,12 @@ NARRATIVE QUALITY (your main judgment call):
 
 POOL MEMORY: Past losses or problems → strong skip signal.
 
+INDICATOR GATE (pre-filtered — do NOT second-guess):
+- indicator_confirmation.confirmed = true means the entry preset already passed. Trust it.
+- rsi_extreme preset confirms BOTH oversold (RSI ≤ rsiOversold) AND overbought (RSI ≥ rsiOverbought). Both are valid entry signals by design.
+- NEVER reject a candidate solely because RSI is overbought. Overbought confirmation = momentum continuation signal for this LP strategy. The gate would have rejected it if it were invalid.
+- Only override indicator_confirmation if pool_memory shows catastrophic history (e.g. 6+ consecutive losses, 100% OOR rate) AND no other candidate is available.
+
 DEPLOY RULES:
 - COMPOUNDING: Use the deploy amount from the goal EXACTLY. Do NOT default to a smaller number.
 - strategy = ${config.strategy.strategy} — always use this exact value, never change it.
