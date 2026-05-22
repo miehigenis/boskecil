@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rtk ls *)",
+      "Bash(rtk grep *)",
+      "Bash(rtk read *)",
+      "Bash(python3)",
+      "Bash(rtk wc *)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 *)",
+      "mcp__plugin_claude-mem_mcp-search__search",
+      "Bash(pm2 restart *)",
+      "Bash(node *)",
+      "Bash(rtk find *)",
+      "mcp__plugin_claude-mem_mcp-search__get_observations",
+      "Bash(rtk git *)",
+      "Bash(xargs -I{} sh -c 'git show {}:index.js 2>/dev/null | grep -q \"blockList\" && echo \"{}\"')",
+      "Bash(pm2 logs *)",
+      "Bash(2>&1)",
+      "Bash(awk '/^export async function discoverPools/,/^export async function/' /home/ubuntu/meridian/tools/screening.js)",
+      "Bash(rtk curl *)",
+      "mcp__plugin_claude-mem_mcp-search__smart_search",
+      "mcp__plugin_claude-mem_mcp-search__smart_outline",
+      "Bash(pm2 list *)",
+      "Bash(grep -v \"^--$\")"
+    ]
+  }
+}

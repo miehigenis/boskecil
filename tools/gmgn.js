@@ -604,11 +604,20 @@ export async function checkBounceSetup(mint) {
   };
 }
 
+// Log filtered tokens per stage — compact, max 3 examples
+function logStageFiltered(label, items) {
+  if (!items.length) return;
+  const total = items.length;
+  const shown = items.slice(0, 3).map(i => `${i.name}: ${i.reason}`).join(" | ");
+  log("gmgn", `${label} filtered (${total}): ${shown}${total > 3 ? ` | +${total - 3} more` : ""}`);
+}
+
 export async function discoverGmgnPools({ limit = 10 } = {}) {
   const g = config.gmgn;
   const filtered = [];
   const stagePassing = {};
   const stageCounts = {};
+  const byStage = { s1: [], s2: [], s3: [], s4: [], s5: [] };
 
   // ── Stage 1: rank filter ──────────────────────────────────────────────────
   const rankPayload = await gmgnFetch("/v1/market/rank", {
@@ -635,6 +644,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
     const check = passBasicRankFilter(token);
     if (!check.pass) {
       filtered.push({ stage: 1, name: token.symbol || token.address, reason: check.reasons.join(", ") });
+      byStage.s1.push({ name: token.symbol || token.address, reason: check.reasons.join(", ") });
       return false;
     }
     return true;
@@ -668,12 +678,14 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
       const infoCheck = analyzeTokenInfo(info);
       if (!infoCheck.passed) {
         filtered.push({ stage: 2, name: token.symbol || mint, reason: infoCheck.reasons.join(", ") });
+        byStage.s2.push({ name: token.symbol || mint, reason: infoCheck.reasons.join(", ") });
         continue;
       }
       normalS2.push({ token, info, infoCheck });
     } catch (error) {
       log("gmgn", `Stage2 skip ${token.symbol || mint}: ${error.message}`);
       filtered.push({ stage: 2, name: token.symbol || mint, reason: error.message });
+      byStage.s2.push({ name: token.symbol || mint, reason: error.message });
     }
   }
   const s2 = [...whitelistS2, ...normalS2];
@@ -711,12 +723,14 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
       const topPools = await fetchTopMeteoraDlmmPoolsForMint(mint, minTvl, 2);
       if (topPools.length === 0) {
         filtered.push({ stage: 3, name: token.symbol || mint, reason: `no SOL DLMM pool above tvl>$${minTvl.toLocaleString()}` });
+        byStage.s3.push({ name: token.symbol || mint, reason: `no DLMM pool tvl>$${minTvl.toLocaleString()}` });
         continue;
       }
       s3.push({ token, info, infoCheck, holdersCheck, topPools });
     } catch (error) {
       log("gmgn", `Stage3 skip ${token.symbol || mint}: ${error.message}`);
       filtered.push({ stage: 3, name: token.symbol || mint, reason: error.message });
+      byStage.s3.push({ name: token.symbol || mint, reason: error.message });
     }
   }
   stageCounts.s3 = s3.length;
@@ -740,6 +754,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
       }
       if (!indicatorCheck.passed) {
         filtered.push({ stage: 4, name: entry.token.symbol || mint, reason: indicatorCheck.reasons.join(", ") });
+        byStage.s4.push({ name: entry.token.symbol || mint, reason: indicatorCheck.reasons.join(", ") });
         continue;
       }
       s4.push({ ...entry, indicatorSignal: indicatorCheck.signal });
@@ -760,12 +775,14 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
       const { pool, detail: poolDetail } = await pickBestPool(topPools);
       if (!pool) {
         filtered.push({ stage: 5, name: token.symbol || mint, reason: "pool selection failed" });
+        byStage.s5.push({ name: token.symbol || mint, reason: "pool selection failed" });
         continue;
       }
       const security = {};
       const candidate = condenseGmgnCandidate({ token, pool, poolDetail, security, info, infoAnalysis: infoCheck, holdersAnalysis: holdersCheck, indicatorSignal });
       if (!candidate.pool || !candidate.base?.mint) {
         filtered.push({ stage: 5, name: token.symbol || mint, reason: "incomplete pool mapping" });
+        byStage.s5.push({ name: token.symbol || mint, reason: "incomplete pool mapping" });
         continue;
       }
       // ── Volatility filter ──────────────────────────────────────────────────
@@ -775,10 +792,12 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
       if (candidate.volatility != null) {
         if (candidate.volatility < minVol) {
           filtered.push({ stage: 5, name: token.symbol || mint, reason: `volatility ${candidate.volatility} < min ${minVol}` });
+          byStage.s5.push({ name: token.symbol || mint, reason: `vol ${candidate.volatility} < min` });
           continue;
         }
         if (candidate.volatility > maxVol) {
           filtered.push({ stage: 5, name: token.symbol || mint, reason: `volatility ${candidate.volatility} > max ${maxVol}` });
+          byStage.s5.push({ name: token.symbol || mint, reason: `vol ${candidate.volatility} > max` });
           continue;
         }
       }
@@ -786,11 +805,19 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
     } catch (error) {
       log("gmgn", `Stage5 skip ${token.symbol || mint}: ${error.message}`);
       filtered.push({ stage: 5, name: token.symbol || mint, reason: error.message });
+      byStage.s5.push({ name: token.symbol || mint, reason: error.message });
     }
   }
   stageCounts.s5 = pools.length;
   stagePassing.s5 = pools.map((p) => ({ name: p.name || p.base?.symbol, reason: "volatility OK" }));
   log("gmgn", `Stage5 final: ${s4.length} → ${pools.length} candidates`);
+
+  // Log filtered tokens per stage
+  logStageFiltered("S1 rank", byStage.s1);
+  logStageFiltered("S2 info", byStage.s2);
+  logStageFiltered("S3 pool", byStage.s3);
+  logStageFiltered("S4 indicators", byStage.s4);
+  logStageFiltered("S5 pick", byStage.s5);
 
   return {
     total: ranked.length,

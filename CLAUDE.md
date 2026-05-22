@@ -204,13 +204,13 @@ bins_below = round(lo + (volatility / 5) * (hi - lo)), clamped to [lo, hi]
 
 **Bin step overrides (calibrated May 2026):**
 
-| bin_step | lo | hi | Drawdown at hi |
-|----------|----|----|----------------|
-| 50 | 139 | 380 | -85% |
-| 80 | 131 | 289 | -90% |
-| 100 | 105 | 231 | -90% |
-| 125 | 85 | 185 | -90% |
-| other | minBinsBelow | maxBinsBelow | -65% floor / -90% ceiling |
+| bin_step | lo | hi | Drawdown at lo | Drawdown at hi |
+|----------|----|----|----------------|----------------|
+| 50 | 139 | 380 | -50% | -85% |
+| 80 | 151 | 289 | -70% | -90% |
+| 100 | 121 | 231 | -70% | -90% |
+| 125 | 97 | 185 | -70% | -90% |
+| other | minBinsBelow | maxBinsBelow | -70% floor | -90% ceiling |
 
 Drawdown formula: `1 - (1 + binStep/10000)^-binsBelow`
 

@@ -584,8 +584,12 @@ export async function confirmIndicatorPreset({
   intervals = config.indicators.intervals,
   refresh = false,
 } = {}) {
-  if (!config.indicators.enabled || !mint || !preset) {
+  // null preset = explicit disable, not ambiguous pass
+  if (!config.indicators.enabled || !mint) {
     return { enabled: false, confirmed: true, reason: "Indicators disabled or not configured", intervals: [] };
+  }
+  if (preset == null) {
+    return { enabled: true, confirmed: true, reason: "Exit indicator disabled (null preset)", intervals: [] };
   }
 
   const targets = normalizeIntervals(intervals);

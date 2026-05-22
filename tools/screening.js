@@ -216,13 +216,6 @@ export async function discoverPools({
     category: s.category,
   });
 
-  const data = await fetchPoolDiscoveryPage({
-    page_size,
-    filters,
-    timeframe: s.timeframe,
-    category: s.category,
-  });
-
   let rawPools = Array.isArray(data.data) ? data.data : [];
 
   if (config.screening.useDiscordSignals) {

@@ -347,10 +347,26 @@ export async function runManagementCycle({ silent = false } = {}) {
     mgmtReport = reportLines.join("\n\n") +
       `\n\nSummary: 💼 ${positions.length} positions | ${cur}${totalValue.toFixed(4)} | fees: ${cur}${totalUnclaimed.toFixed(4)} | ${actionSummary}`;
 
+    // ── Execute CLOSE actions directly (close_position not in manager LLM tools) ──
+    for (const p of positionData) {
+      const act = actionMap.get(p.position);
+      if (act.action !== "CLOSE") continue;
+      setCloseReason(p.position, act.reason);
+      log("state", `[Exit close] ${p.pair} — Rule ${act.rule}: ${act.reason} — executing close_position`);
+      const closeResult = await executeTool("close_position", { position_address: p.position, reason: act.reason });
+      if (closeResult.success) {
+        log("state", `[Exit close] ${p.pair} — closed ✅ PnL: ${closeResult.pnl_pct}% ($${closeResult.pnl_usd})`);
+        notifyClose({ pair: closeResult.pool_name || p.pair, pnlUsd: closeResult.pnl_usd ?? 0, pnlPct: closeResult.pnl_pct ?? 0, reason: act.reason }).catch(() => {});
+      } else {
+        log("error", `[Exit close] ${p.pair} — close failed: ${JSON.stringify(closeResult)}`);
+      }
+      actionMap.set(p.position, { ...act, executedDirectly: true });
+    }
+
     // ── Call LLM only if action needed ──────────────────────────────
     const actionPositions = positionData.filter(p => {
       const a = actionMap.get(p.position);
-      return a.action !== "STAY";
+      return a.action !== "STAY" && a.action !== "CLOSE";
     });
 
     if (actionPositions.length > 0) {
@@ -1121,18 +1137,19 @@ function buildCandidateDetailsReport(candidates = []) {
 
 // Drawdown formula: 1 - (1 + binStep/10000)^-binsBelow = downside coverage %
 //
+// Drawdown formula: 1 - (1 + binStep/10000)^-binsBelow = downside coverage %
 // bin_step 50:  lo=139 → -50%   (vol=0 flat)   /  hi=380 → -85%   (vol=5 max)
-// bin_step 80:  lo=131 → -65%   (vol=0 flat)   /  hi=289 → -90%   (vol=5 max)
-// bin_step 100: lo=105 → -65%   (vol=0 flat)   /  hi=231 → -90%   (vol=5 max)
-// bin_step 125: lo=85  → -65%   (vol=0 flat)   /  hi=185 → -90%   (vol=5 max)
-// fallback (other): minBinsBelow → -65% floor / maxBinsBelow → -90% ceiling
+// bin_step 80:  lo=151 → -70%   (vol=0 flat)   /  hi=289 → -90%   (vol=5 max)
+// bin_step 100: lo=121 → -70%   (vol=0 flat)   /  hi=231 → -90%   (vol=5 max)
+// bin_step 125: lo=97  → -70%   (vol=0 flat)   /  hi=185 → -90%   (vol=5 max)
+// fallback (other): minBinsBelow → -70% floor / maxBinsBelow → -90% ceiling
 function computeBinsBelow(volatility, binStep = null) {
   let lo = config.strategy.minBinsBelow;
   let hi = config.strategy.maxBinsBelow; // fallback
   if (binStep === 50)  { lo = 139;  hi = 380; }
-  else if (binStep === 80)  { lo = 131;  hi = 289; }
-  else if (binStep === 100) { lo = 105; hi = 231; }
-  else if (binStep === 125) { lo = 85;  hi = 185; }
+  else if (binStep === 80)  { lo = 151;  hi = 289; }
+  else if (binStep === 100) { lo = 121; hi = 231; }
+  else if (binStep === 125) { lo = 97;  hi = 185; }
   return Math.max(lo, Math.min(hi, Math.round(lo + ((Number(volatility) || 0) / 5) * (hi - lo))));
 }
 
