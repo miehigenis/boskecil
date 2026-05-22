@@ -16,6 +16,7 @@ const STATE_FILE = "./state.json";
 
 const MAX_RECENT_EVENTS = 20;
 const MAX_INSTRUCTION_LENGTH = 280;
+const AUTO_CLOSE_REASON = "auto-closed (not found on-chain)";
 
 function sanitizeStoredText(text, maxLen = MAX_INSTRUCTION_LENGTH) {
   if (text == null) return null;
@@ -38,6 +39,24 @@ function load() {
     log("state_error", `Failed to read state.json: ${err.message}`);
     return { positions: {}, lastUpdated: null };
   }
+}
+
+function extractDeterministicCloseReason(notes) {
+  if (!Array.isArray(notes)) return null;
+
+  for (const note of [...notes].reverse()) {
+    if (typeof note !== "string") continue;
+    const match = note.match(/^Closed at .*?:\s*(.+)$/);
+    if (match?.[1]?.trim()) return match[1].trim();
+  }
+
+  return null;
+}
+
+function getAutoCloseReason(position_address) {
+  const state = load();
+  const pos = state.positions?.[position_address];
+  return extractDeterministicCloseReason(pos?.notes) || AUTO_CLOSE_REASON;
 }
 
 function save(state) {
@@ -569,9 +588,6 @@ export async function syncOpenPositions(active_addresses) {
  * then log to JSONL and fire Telegram notification.
  */
 async function fetchAutoClosedPnLAndNotify(position_address, pool_address, pool_name) {
-  const walletAddress = (await import("./telegram.js").then(() => null)).catch(() => null);
-  // We need wallet address — get from environment or pass through
-  const { config } = await import("../config.js");
   const RPC_URL = process.env.RPC_URL;
   const privateKey = process.env.WALLET_PRIVATE_KEY;
   if (!RPC_URL || !privateKey) return;
@@ -608,26 +624,27 @@ async function fetchAutoClosedPnLAndNotify(position_address, pool_address, pool_
 
     // Log JSONL entry
     const timestamp = new Date().toISOString();
+    const closeReason = getAutoCloseReason(position_address);
     const entry = {
       timestamp,
       tool: "close_position",
-      args: { position_address, reason: "auto-closed (not found on-chain)" },
+      args: { position_address, reason: closeReason },
       result: { success: true, position: position_address, pool: pool_address, pnl_usd: pnlUsd, pnl_pct: pnlPct },
       success: true,
       auto_closed: true,
       duration_ms: 0,
     };
-    const { logAction } = await import("../logger.js");
+    const { logAction } = await import("./logger.js");
     logAction(entry);
 
     // Fire Telegram notification
     try {
-      const { notifyClose } = await import("../telegram.js");
+      const { notifyClose } = await import("./telegram.js");
       notifyClose({
         pair: pool_name || position_address.slice(0, 8),
         pnlUsd: pnlUsd ?? 0,
         pnlPct: pnlPct ?? 0,
-        reason: "auto-closed (not found on-chain)",
+        reason: closeReason,
       }).catch(() => {});
     } catch (e) {
       log("sync_close_warn", `notifyClose failed for ${position_address}: ${e.message}`);
