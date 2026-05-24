@@ -459,13 +459,22 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
   );
 }
 
-export async function notifyClose({ pair, pnlUsd, pnlPct, reason }) {
+export async function notifyClose({ pair, pnlUsd, pnlPct, pnlSol, reason, amountSol, strategy, minutesHeld }) {
   const sign = pnlUsd >= 0 ? "+" : "";
-  const reasonLine = reason ? `\nReason: ${escHtml(reason)}` : "";
-  await sendHTML(
-    `🔒 <b>Closed</b> ${escHtml(pair)}${reasonLine}\n` +
-    `PnL: ${sign}$${(pnlUsd ?? 0).toFixed(2)} (${sign}${(pnlPct ?? 0).toFixed(2)}%)`
-  );
+  const signSol = pnlSol >= 0 ? "+" : "";
+  const lines = [
+    `🟢 <b>Position Closed</b> — ${escHtml(pair)}`,
+    `💰 PnL: ${signSol}${(pnlSol ?? 0).toFixed(3)} (${sign}${(pnlUsd ?? 0).toFixed(2)}) (${sign}${(pnlPct ?? 0).toFixed(2)}%)`,
+  ];
+  if (amountSol != null) lines.push(`💎 Deployed: $${amountSol.toFixed(1)}`);
+  if (minutesHeld != null) {
+    const h = Math.floor(minutesHeld / 60);
+    const m = minutesHeld % 60;
+    lines.push(`⏱ Hold time: ${h > 0 ? `${h}h ` : ""}${m}m`);
+  }
+  if (strategy) lines.push(`📐 Strategy: ${escHtml(strategy)}`);
+  if (reason) lines.push(`📝 Reason: ${escHtml(reason)}`);
+  await sendHTML(lines.join("\n"));
 }
 
 export async function notifySwap({ inputSymbol, outputSymbol, amountIn, amountOut, tx }) {

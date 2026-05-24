@@ -640,11 +640,18 @@ async function fetchAutoClosedPnLAndNotify(position_address, pool_address, pool_
     // Fire Telegram notification
     try {
       const { notifyClose } = await import("./telegram.js");
+      const tracked = getTrackedPosition(position_address);
+      const deployedAt = tracked?.deployed_at ? new Date(tracked.deployed_at).getTime() : null;
+      const closedAt = tracked?.closed_at ? new Date(tracked.closed_at).getTime() : null;
+      const minutesHeld = deployedAt && closedAt ? Math.floor((closedAt - deployedAt) / 60000) : null;
       notifyClose({
         pair: pool_name || position_address.slice(0, 8),
         pnlUsd: pnlUsd ?? 0,
         pnlPct: pnlPct ?? 0,
         reason: closeReason,
+        amountSol: tracked?.amount_sol ?? null,
+        strategy: tracked?.strategy ?? null,
+        minutesHeld,
       }).catch(() => {});
     } catch (e) {
       log("sync_close_warn", `notifyClose failed for ${position_address}: ${e.message}`);

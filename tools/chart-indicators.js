@@ -22,6 +22,8 @@ const BAR_MAP = {
   "1_MINUTE":  "1m",
   "5_MINUTE":  "5m",
   "15_MINUTE": "15m",
+  "30_MINUTE": "30m",
+  "1_HOUR":    "1H",
 };
 
 export function fetchCandles(mint, bar = "5m", limit = 299) {
@@ -303,7 +305,7 @@ function normalizeIntervals(intervals) {
   const list = Array.isArray(intervals) ? intervals : DEFAULT_INTERVALS;
   return list
     .map((value) => String(value || "").trim().toUpperCase())
-    .filter((value) => value === "1_MINUTE" || value === "5_MINUTE" || value === "15_MINUTE");
+    .filter((value) => value === "1_MINUTE" || value === "5_MINUTE" || value === "15_MINUTE" || value === "30_MINUTE" || value === "1_HOUR");
 }
 
 function buildSignalSummary(payload) {
@@ -481,12 +483,12 @@ function evaluatePreset(side, preset, payload, opts = {}) {
             reason: "No exit logic for this preset — manual exit only",
             signal: summary,
           };
-    case "rsi_overbought_supertrend":
+    case "rsi_overbought":
       return side === "entry"
         ? {
-            confirmed: rsi != null && rsi >= overbought && (summary.supertrendBreakUp || isBullish),
+            confirmed: rsi != null && rsi >= overbought,
             reason: rsi != null
-              ? `RSI ${rsi.toFixed(2)} >= overbought ${overbought} with bullish Supertrend`
+              ? `RSI ${rsi.toFixed(2)} >= overbought ${overbought}`
               : "RSI unavailable",
             signal: summary,
           }

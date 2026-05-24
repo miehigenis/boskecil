@@ -1261,7 +1261,7 @@ async function fetchOpenPositionsFromMeridian({ walletAddress, agentId }) {
 }
 
 // ─── Get My Positions ──────────────────────────────────────────
-export async function getMyPositions({ force = false, silent = false } = {}) {
+export async function getMyPositions({ force = false, silent = false, skipSync = false } = {}) {
   if (!force && _positionsCache && Date.now() - _positionsCacheAt < POSITIONS_CACHE_TTL) {
     return _positionsCache;
   }
@@ -1283,7 +1283,7 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
           agentId: config.hiveMind.agentId || "agent-local",
         });
         const normalizedPositions = Array.isArray(result.positions) ? result.positions : [];
-        await syncOpenPositions(normalizedPositions.map((p) => p.position));
+        if (!skipSync) await syncOpenPositions(normalizedPositions.map((p) => p.position));
         _positionsCache = {
           wallet: walletAddress,
           total_positions: Number(result.total_positions || 0),
@@ -1446,7 +1446,7 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
     }
 
     const result = { wallet: walletAddress, total_positions: positions.length, positions };
-    await syncOpenPositions(positions.map(p => p.position));
+    if (!skipSync) await syncOpenPositions(positions.map(p => p.position));
     _positionsCache = result;
     _positionsCacheAt = Date.now();
     return result;
@@ -1668,7 +1668,7 @@ export async function closePosition({ position_address, reason }) {
         let closedConfirmed = false;
         for (let attempt = 0; attempt < 4; attempt++) {
           try {
-            const refreshed = await getMyPositions({ force: true, silent: true });
+            const refreshed = await getMyPositions({ force: true, silent: true, skipSync: true });
             const stillOpen = refreshed?.positions?.some((p) => p.position === position_address);
             if (!stillOpen) {
               closedConfirmed = true;
@@ -1903,7 +1903,7 @@ export async function closePosition({ position_address, reason }) {
     let closedConfirmed = false;
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
-        const refreshed = await getMyPositions({ force: true, silent: true });
+        const refreshed = await getMyPositions({ force: true, silent: true, skipSync: true });
         const stillOpen = refreshed?.positions?.some((p) => p.position === position_address);
         if (!stillOpen) {
           closedConfirmed = true;
@@ -2076,11 +2076,15 @@ export async function closePosition({ position_address, reason }) {
         claim_txs: claimTxHashes,
         close_txs: closeTxHashes,
         txs: txHashes,
+        pnl_sol: (pnlPct / 100) * (tracked.amount_sol || 0) || null,
         pnl_usd: pnlUsd,
         pnl_pct: pnlPct,
         base_mint: baseMint,
         auto_swapped: true,
         reason: reason || null,
+        amount_sol: tracked.amount_sol || null,
+        strategy: tracked.strategy || null,
+        minutes_held: minutesHeld,
       };
     }
 

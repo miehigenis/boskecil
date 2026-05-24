@@ -281,7 +281,11 @@ export async function runManagementCycle({ silent = false } = {}) {
             pair: closeResult.pool_name || p.pair,
             pnlUsd: closeResult.pnl_usd ?? 0,
             pnlPct: closeResult.pnl_pct ?? 0,
-            reason: closeRule.reason
+            pnlSol: closeResult.pnl_sol ?? null,
+            reason: closeRule.reason,
+            amountSol: closeResult.amount_sol ?? null,
+            strategy: closeResult.strategy ?? null,
+            minutesHeld: closeResult.minutes_held ?? null,
           }).catch(() => {});
         } else {
           log("error", `[Deterministic close] ${p.pair} — failed: ${JSON.stringify(closeResult)}`);
@@ -356,7 +360,7 @@ export async function runManagementCycle({ silent = false } = {}) {
       const closeResult = await executeTool("close_position", { position_address: p.position, reason: act.reason });
       if (closeResult.success) {
         log("state", `[Exit close] ${p.pair} — closed ✅ PnL: ${closeResult.pnl_pct}% ($${closeResult.pnl_usd})`);
-        notifyClose({ pair: closeResult.pool_name || p.pair, pnlUsd: closeResult.pnl_usd ?? 0, pnlPct: closeResult.pnl_pct ?? 0, reason: act.reason }).catch(() => {});
+        notifyClose({ pair: closeResult.pool_name || p.pair, pnlUsd: closeResult.pnl_usd ?? 0, pnlPct: closeResult.pnl_pct ?? 0, pnlSol: closeResult.pnl_sol ?? null, reason: act.reason, amountSol: closeResult.amount_sol ?? null, strategy: closeResult.strategy ?? null, minutesHeld: closeResult.minutes_held ?? null }).catch(() => {});
       } else {
         log("error", `[Exit close] ${p.pair} — close failed: ${JSON.stringify(closeResult)}`);
       }
@@ -1813,7 +1817,10 @@ async function telegramHandler(msg) {
       await sendMessage(`Closing ${pos.pair}...`);
       const result = await executeTool("close_position", { position_address: pos.position, reason: "user /close" });
       if (result.success) {
-        notifyClose({ pair: result.pool_name || pos.pair, pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0, reason: "user /close" }).catch(() => {});
+        const tracked = getTrackedPosition(pos.position);
+        const deployedAt = tracked?.deployed_at ? new Date(tracked.deployed_at).getTime() : null;
+        const minutesHeld = deployedAt ? Math.floor((Date.now() - deployedAt) / 60000) : null;
+        notifyClose({ pair: result.pool_name || pos.pair, pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0, pnlSol: result.pnl_sol ?? null, reason: "user /close", amountSol: tracked?.amount_sol ?? null, strategy: tracked?.strategy ?? null, minutesHeld }).catch(() => {});
         const closeTxs = result.close_txs?.length ? result.close_txs : result.txs;
         const claimNote = result.claim_txs?.length ? `\nClaim txs: ${result.claim_txs.join(", ")}` : "";
         await sendMessage(`✅ Closed ${pos.pair}\nPnL: ${config.management.solMode ? "◎" : "$"}${result.pnl_usd ?? "?"} | close txs: ${closeTxs?.join(", ") || "n/a"}${claimNote}`);
@@ -1833,7 +1840,12 @@ async function telegramHandler(msg) {
       for (const pos of positions) {
         try {
           const result = await executeTool("close_position", { position_address: pos.position, reason: "user /close" });
-          if (result.success) notifyClose({ pair: result.pool_name || pos.pair, pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0, reason: "user /closeall" }).catch(() => {});
+          if (result.success) {
+            const tracked = getTrackedPosition(pos.position);
+            const deployedAt = tracked?.deployed_at ? new Date(tracked.deployed_at).getTime() : null;
+            const minutesHeld = deployedAt ? Math.floor((Date.now() - deployedAt) / 60000) : null;
+            notifyClose({ pair: result.pool_name || pos.pair, pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0, pnlSol: result.pnl_sol ?? null, reason: "user /closeall", amountSol: tracked?.amount_sol ?? null, strategy: tracked?.strategy ?? null, minutesHeld }).catch(() => {});
+          }
           results.push(`${pos.pair}: ${result.success ? "closed" : `failed (${result.error || "unknown"})`}`);
         } catch (error) {
           results.push(`${pos.pair}: failed (${error.message})`);
