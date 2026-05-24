@@ -26,6 +26,35 @@ const BAR_MAP = {
   "1_HOUR":    "1H",
 };
 
+export function normalizeCandlesForIndicators(candles = []) {
+  const normalized = (Array.isArray(candles) ? candles : [])
+    .map((c) => {
+      const rawTs = c.ts ?? c.time ?? c.timestamp ?? c.t ?? null;
+      let ts = Number(rawTs);
+      if (Number.isFinite(ts) && ts > 0 && ts < 10_000_000_000) ts *= 1000; // seconds → ms
+      return {
+        ts: Number.isFinite(ts) && ts > 0 ? ts : null,
+        confirm: c.confirm ?? null,
+        high:   parseFloat(c.high   ?? c.h ?? 0),
+        low:    parseFloat(c.low    ?? c.l ?? 0),
+        close:  parseFloat(c.close  ?? c.c ?? 0),
+        volume: parseFloat(c.volume ?? c.v ?? c.vol ?? 0),
+      };
+    })
+    .filter((c) =>
+      Number.isFinite(c.high) &&
+      Number.isFinite(c.low) &&
+      Number.isFinite(c.close) &&
+      c.close > 0
+    );
+
+  if (normalized.every((c) => c.ts != null)) {
+    normalized.sort((a, b) => a.ts - b.ts);
+  }
+
+  return normalized;
+}
+
 export function fetchCandles(mint, bar = "5m", limit = 299) {
   try {
     const raw = spawnSync(CLI, [
@@ -40,12 +69,7 @@ export function fetchCandles(mint, bar = "5m", limit = 299) {
     try { data = JSON.parse(raw.stdout); } catch { return []; }
     const candles = Array.isArray(data.data) ? data.data
                : Array.isArray(data) ? data : [];
-    return candles.map((c) => ({
-      high:   parseFloat(c.high   || c.h || 0),
-      low:    parseFloat(c.low    || c.l || 0),
-      close:  parseFloat(c.close  || c.c || 0),
-      volume: parseFloat(c.volume || c.v || 0),
-    })).filter((c) => c.close > 0);
+    return normalizeCandlesForIndicators(candles);
   } catch { return []; }
 }
 
@@ -245,22 +269,32 @@ export function getVwapIndicators(mint) {
  * @param {number} opts.rsiLength - RSI period
  * @param {boolean} opts.refresh - force refresh (always false for local, existing data kept in cRSI buffer)
  */
-export function computeChartIndicatorsLocal(mint, {
-  interval = "5_MINUTE",
+export function computeChartIndicatorsFromCandles(mint, inputCandles, {
   candles = 298,
+  minCandles = candles,
   rsiLength = 2,
   domCycle = 20,
   vibration = 10,
   leveling = 10,
 } = {}) {
-  const bar = BAR_MAP[interval] || "5m";
-  const allCandles = fetchCandles(mint, bar, candles + 40); // extra for lookback
-  if (allCandles.length < candles) {
-    return { insufficient_data: true, latest: null };
+  const allCandles = normalizeCandlesForIndicators(inputCandles);
+  const requestedCandles = Math.max(1, Number(candles) || 298);
+  const requiredCandles = Math.max(1, Number(minCandles ?? requestedCandles) || requestedCandles);
+
+  if (allCandles.length < requiredCandles) {
+    return {
+      insufficient_data: true,
+      latest: null,
+      candleCount: allCandles.length,
+      requestedCandles,
+      minCandles: requiredCandles,
+      usedCandles: 0,
+    };
   }
 
-  const recent = allCandles.slice(-candles);
-  const previous = allCandles.slice(-candles - 1, -1);
+  const usedCandles = Math.min(requestedCandles, allCandles.length);
+  const recent = allCandles.slice(-usedCandles);
+  const previous = allCandles.slice(-usedCandles - 1, -1);
   const closes = recent.map(c => c.close);
   const highs  = recent.map(c => c.high);
   const lows   = recent.map(c => c.low);
@@ -284,6 +318,10 @@ export function computeChartIndicatorsLocal(mint, {
 
   return {
     insufficient_data: false,
+    candleCount: allCandles.length,
+    requestedCandles,
+    minCandles: requiredCandles,
+    usedCandles,
     latest: {
       candle: { close: latestClose },
       previousCandle: { close: prevClose },
@@ -297,6 +335,28 @@ export function computeChartIndicatorsLocal(mint, {
       crsi: { value: crsi, db, ub },
     },
   };
+}
+
+export function computeChartIndicatorsLocal(mint, {
+  interval = "5_MINUTE",
+  candles = 298,
+  minCandles = candles,
+  rsiLength = 2,
+  domCycle = 20,
+  vibration = 10,
+  leveling = 10,
+} = {}) {
+  const bar = BAR_MAP[interval] || "5m";
+  const requestedCandles = Math.max(1, Number(candles) || 298);
+  const allCandles = fetchCandles(mint, bar, requestedCandles + 40); // extra for lookback
+  return computeChartIndicatorsFromCandles(mint, allCandles, {
+    candles: requestedCandles,
+    minCandles,
+    rsiLength,
+    domCycle,
+    vibration,
+    leveling,
+  });
 }
 
 // ── Preset Evaluation ────────────────────────────────────────────────────────
@@ -570,13 +630,14 @@ function evaluatePreset(side, preset, payload, opts = {}) {
  */
 export async function fetchChartIndicatorsForMint(mint, opts = {}) {
   const interval = opts.interval || "5_MINUTE";
-  const candles = opts.candles || 298;
-  const rsiLength = opts.rsiLength || 2;
-  const domCycle = opts.domCycle || config.indicators?.domCycle || 20;
-  const vibration = opts.vibration || config.indicators?.vibration || 10;
-  const leveling = opts.leveling || config.indicators?.leveling || 10;
+  const candles = opts.candles ?? 298;
+  const minCandles = opts.minCandles ?? candles;
+  const rsiLength = opts.rsiLength ?? 2;
+  const domCycle = opts.domCycle ?? config.indicators?.domCycle ?? 20;
+  const vibration = opts.vibration ?? config.indicators?.vibration ?? 10;
+  const leveling = opts.leveling ?? config.indicators?.leveling ?? 10;
 
-  return computeChartIndicatorsLocal(mint, { interval, candles, rsiLength, domCycle, vibration, leveling });
+  return computeChartIndicatorsLocal(mint, { interval, candles, minCandles, rsiLength, domCycle, vibration, leveling });
 }
 
 export async function confirmIndicatorPreset({

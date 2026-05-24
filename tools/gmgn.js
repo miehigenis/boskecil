@@ -510,32 +510,63 @@ export async function checkBounceSetup(mint) {
   const g = config.gmgn;
   const intervals = g.indicatorIntervals || [g.indicatorInterval || "15_MINUTE"];
   const mode = g.indicatorMultiTfMode || "any";
+  const indicatorMinCandles = Math.max(1, Number(g.indicatorMinCandles ?? 11) || 11);
+  const indicatorCandles = Math.max(indicatorMinCandles, Number(g.indicatorCandles ?? 20) || 20);
 
   // Run per-TF checks
   const tfResults = [];
   for (const interval of intervals) {
-    const payload = await fetchChartIndicatorsForMint(mint, { interval });
+    const payload = await fetchChartIndicatorsForMint(mint, {
+      interval,
+      candles: indicatorCandles,
+      minCandles: indicatorMinCandles,
+    });
+    if (payload?.insufficient_data) {
+      const candleCount = Number(payload?.candleCount ?? 0);
+      tfResults.push({
+        interval,
+        passed: false,
+        reasons: [`insufficient candle data: ${candleCount} < min ${indicatorMinCandles}`],
+        signal: {
+          interval,
+          candleCount,
+          requestedCandles: payload?.requestedCandles ?? indicatorCandles,
+          minCandles: payload?.minCandles ?? indicatorMinCandles,
+          rsi: null,
+          rsiLabel: null,
+          bbPosition: "unknown",
+          supertrendDirection: null,
+          supertrendBreakUp: false,
+          aboveSupertrend: null,
+        },
+      });
+      continue;
+    }
     const latest = payload?.latest || {};
     const st = latest?.supertrend || {};
-    const stValue = Number(st.value) || 0;
+    const stValue = Number(st.value);
+    const hasSupertrendValue = Number.isFinite(stValue);
     const stDirection = String(st.direction || "").toLowerCase();
     const stBreakUp = !!latest?.states?.supertrendBreakUp;
-    const close = Number(latest?.candle?.close) || 0;
+    const close = Number(latest?.candle?.close);
     const rsiValue = Number(latest?.rsi?.value);
     const bb = latest?.bollinger || {};
-    const upperBand = Number(bb.upper) || 0;
-    const lowerBand = Number(bb.lower) || 0;
+    const upperBand = Number(bb.upper);
+    const lowerBand = Number(bb.lower);
+    const hasUpperBand = Number.isFinite(upperBand) && upperBand > 0;
+    const hasLowerBand = Number.isFinite(lowerBand) && lowerBand > 0;
     const oversold = Number(config.indicators?.rsiOversold ?? 35);
 
     const isBullish = stDirection === "bullish" || stBreakUp;
     const alreadyAtBottom =
       Number.isFinite(rsiValue) && rsiValue < oversold &&
-      close > 0 && lowerBand > 0 && close < lowerBand;
-    const priceAboveSupertrend = close > 0 && stValue > 0 && close >= stValue;
+      close > 0 && hasLowerBand && close < lowerBand;
+    const priceAboveSupertrend = close > 0 && hasSupertrendValue && close >= stValue;
 
     let bbPosition = "inside";
-    if (close > 0 && upperBand > 0 && close > upperBand) bbPosition = "above";
-    else if (close > 0 && lowerBand > 0 && close < lowerBand) bbPosition = "below";
+    if (!hasUpperBand || !hasLowerBand) bbPosition = "unknown";
+    else if (close > 0 && close > upperBand) bbPosition = "above";
+    else if (close > 0 && close < lowerBand) bbPosition = "below";
 
     const rules = g.indicatorRules || {};
     const reasons = [];
@@ -547,7 +578,7 @@ export async function checkBounceSetup(mint) {
       reasons.push(`already at bottom: RSI ${rsiValue.toFixed(1)}, price below lower BB`);
 
     if (rules.requireAboveSupertrend && !priceAboveSupertrend)
-      reasons.push(`price below supertrend (${stValue})`);
+      reasons.push(`price below supertrend (${hasSupertrendValue ? stValue : 0})`);
 
     if (rules.minRsi != null && Number.isFinite(rsiValue) && rsiValue < rules.minRsi)
       reasons.push(`RSI ${rsiValue.toFixed(1)} < min ${rules.minRsi}`);
@@ -571,7 +602,9 @@ export async function checkBounceSetup(mint) {
         bbPosition,
         supertrendDirection: stDirection || null,
         supertrendBreakUp: stBreakUp,
-        aboveSupertrend: close > 0 && stValue > 0 ? close >= stValue : null,
+        aboveSupertrend: close > 0 && hasSupertrendValue ? close >= stValue : null,
+        candleCount: payload?.candleCount ?? null,
+        usedCandles: payload?.usedCandles ?? null,
       },
     });
   }
