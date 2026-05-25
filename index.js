@@ -742,14 +742,15 @@ PRE-LOADED CANDIDATES (${passing.length} pools):
 ${blockList.join("\n\n")}
 
 STEPS:
-1. Pick the best candidate based on narrative quality, smart wallets, and pool metrics.
-2. HARD RULE: Only candidates with indicator = ✓ confirmed are eligible for deploy. If indicator = ✗ rejected or ⚠ skipped, DO NOT DEPLOY that candidate.
-3. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
+1. First call get_top_candidates. Use the returned list to validate the pre-loaded candidates and anchor the cycle.
+2. Pick the best candidate based on narrative quality, smart wallets, and pool metrics.
+3. HARD RULE: Only candidates with indicator = ✓ confirmed are eligible for deploy. If indicator = ✗ rejected or ⚠ skipped, DO NOT DEPLOY that candidate.
+4. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
    strategy = ${config.strategy.strategy} (always use this, never change it).
    bins_below = round(${config.strategy.minBinsBelow} + (volatility/5)*${config.strategy.maxBinsBelow - config.strategy.minBinsBelow}) clamped to [${config.strategy.minBinsBelow},${config.strategy.maxBinsBelow}].
    bins_above = 0. Single-side SOL only: set amount_y, keep amount_x = 0.
    pass deploy_position.volatility = the candidate volatility value.
-4. Report in this exact format (no tables, no extra sections):
+5. Report in this exact format (no tables, no extra sections):
    🚀 <b>DEPLOYED</b>
 
    <b><pool name></b>
@@ -788,7 +789,7 @@ STEPS:
 
    <b>WHY THIS WON</b>
    <2-4 concise sentences on why this pool won, key risks, and why it still beat the alternatives>
-4. If no pool qualifies, report in this exact format instead:
+5. If no pool qualifies, report in this exact format instead:
    ⛔ NO DEPLOY
 
    Cycle finished with no valid entry.

@@ -597,7 +597,7 @@ export async function checkBounceSetup(mint) {
         interval,
         rsi: Number.isFinite(rsiValue) ? Number(rsiValue.toFixed(1)) : null,
         rsiLabel: Number.isFinite(rsiValue)
-          ? (rsiValue < 35 ? "oversold" : rsiValue > 65 ? "overbought" : "neutral")
+          ? (rsiValue < 25 ? "oversold" : rsiValue > 65 ? "overbought" : "neutral")
           : null,
         bbPosition,
         supertrendDirection: stDirection || null,

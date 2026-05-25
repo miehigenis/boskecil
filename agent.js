@@ -6,6 +6,7 @@ import { tools } from "./tools/definitions.js";
 
 const MANAGER_TOOLS  = new Set(["close_position", "claim_fees", "swap_token", "get_position_pnl", "get_my_positions", "get_wallet_balance"]);
 const SCREENER_TOOLS = new Set(["deploy_position", "get_active_bin", "get_top_candidates", "check_smart_wallets_on_pool", "get_token_holders", "get_token_narrative", "get_token_info", "search_pools", "get_wallet_balance", "get_my_positions"]);
+const SCREENER_PRIMER_TOOL = "get_top_candidates";
 const GENERAL_INTENT_ONLY_TOOLS = new Set([
   "self_update",
   "update_config",
@@ -177,6 +178,7 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
   // are allowed until the position is confirmed on-chain. Different pool = block.
   const deployFired = new Map(); // key → true once confirmed
   const mustUseRealTool = shouldRequireRealToolUse(goal, agentType, interactive);
+  const forceFirstToolName = options.forceFirstToolName ?? (agentType === "SCREENER" ? SCREENER_PRIMER_TOOL : null);
   let sawToolCall = false;
   let noToolRetryCount = 0;
 
@@ -191,16 +193,20 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
       const FALLBACK_MODEL = "stepfun/step-3.5-flash:free";
       let response;
       let usedModel = activeModel;
+      const roleTools = getToolsForRole(agentType, goal);
+      const stepTools = step === 0 && forceFirstToolName
+        ? roleTools.filter((t) => t.function.name === forceFirstToolName)
+        : roleTools;
       // Force a tool call on step 0 for action intents — prevents the model from inventing deploy/close outcomes
       const ACTION_INTENTS = /\b(deploy|open|add liquidity|close|exit|withdraw|claim|swap|block|unblock)\b/i;
-      let toolChoice = (step === 0 && (ACTION_INTENTS.test(goal) || mustUseRealTool)) ? "required" : "auto";
+      let toolChoice = (step === 0 && (ACTION_INTENTS.test(goal) || mustUseRealTool || forceFirstToolName)) ? "required" : "auto";
 
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           response = await client.chat.completions.create({
             model: usedModel,
             messages,
-            tools: getToolsForRole(agentType, goal),
+            tools: stepTools,
             tool_choice: toolChoice,
             temperature: config.llm.temperature,
             max_tokens: maxOutputTokens ?? config.llm.maxTokens,
@@ -269,6 +275,46 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
         if (!msg.content) {
           messages.pop(); // remove the empty assistant message
           log("agent", "Empty response, retrying...");
+          continue;
+        }
+        if (step === 0 && forceFirstToolName && !sawToolCall) {
+          messages.pop();
+          log("agent", "No tool call on step 0 — forcing " + forceFirstToolName + " locally");
+
+          const forcedToolCallId = "forced_" + step + "_" + forceFirstToolName;
+          const forcedArgs = {};
+          await onToolStart?.({ name: forceFirstToolName, args: forcedArgs, step });
+          let forcedResult;
+          try {
+            forcedResult = await executeTool(forceFirstToolName, forcedArgs);
+          } catch (err) {
+            forcedResult = { error: err.message || String(err), success: false };
+          }
+          await onToolFinish?.({
+            name: forceFirstToolName,
+            args: forcedArgs,
+            result: forcedResult,
+            success: forcedResult?.success !== false && !forcedResult?.error && !forcedResult?.blocked,
+            step,
+          });
+          messages.push({
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: forcedToolCallId,
+              type: "function",
+              function: {
+                name: forceFirstToolName,
+                arguments: "{}",
+              },
+            }],
+          });
+          messages.push({
+            role: "tool",
+            tool_call_id: forcedToolCallId,
+            content: JSON.stringify(forcedResult),
+          });
+          sawToolCall = true;
           continue;
         }
         if (mustUseRealTool && !sawToolCall) {

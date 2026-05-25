@@ -9,7 +9,17 @@ import { discoverGmgnPools } from "./gmgn.js";
 const DATAPI_JUP = "https://datapi.jup.ag/v1";
 
 const POOL_DISCOVERY_BASE = "https://pool-discovery-api.datapi.meteora.ag";
-const VOLATILITY_TIMEFRAME = "30m";
+const VOLATILITY_TIMEFRAME = "1h";
+const TIMEFRAME_MINUTES = {
+  "5m": 5,
+  "15m": 15,
+  "30m": 30,
+  "1h": 60,
+  "2h": 120,
+  "4h": 240,
+  "12h": 720,
+  "24h": 1440,
+};
 const PVP_SHORTLIST_LIMIT = 2;
 const PVP_RIVAL_LIMIT = 2;
 const PVP_MIN_ACTIVE_TVL = 2_000;
@@ -49,41 +59,90 @@ async function fetchPoolDiscoveryDetail({ poolAddress, timeframe }) {
   return (data.data || [])[0] ?? null;
 }
 
+function getVolatilityTimeframe(sourceTimeframe) {
+  const source = String(sourceTimeframe || "").trim();
+  const sourceMinutes = TIMEFRAME_MINUTES[source];
+  const minMinutes = TIMEFRAME_MINUTES[VOLATILITY_TIMEFRAME];
+  return sourceMinutes != null && sourceMinutes >= minMinutes ? source : VOLATILITY_TIMEFRAME;
+}
+
 async function applyVolatilityTimeframe(rawPools, sourceTimeframe) {
   if (!Array.isArray(rawPools) || rawPools.length === 0) return rawPools;
-  if (sourceTimeframe === VOLATILITY_TIMEFRAME) {
-    for (const pool of rawPools) {
-      if (pool) pool.volatility_timeframe = VOLATILITY_TIMEFRAME;
-    }
-    return rawPools;
+  const volatilityTimeframe = getVolatilityTimeframe(sourceTimeframe);
+
+  // Tag primary-timeframe values on every pool before any overwrite
+  for (const pool of rawPools) {
+    if (!pool) continue;
+    pool[`volume_${sourceTimeframe}`] = pool.volume ?? null;
+    pool[`volatility_${sourceTimeframe}`] = pool.volatility ?? null;
+    pool.volatility_timeframe = volatilityTimeframe;
   }
 
+  if (sourceTimeframe === volatilityTimeframe) return rawPools;
+
   const uniquePoolAddresses = [...new Set(rawPools.map((pool) => pool?.pool_address).filter(Boolean))];
-  const volatilityResults = await Promise.allSettled(
+  const longResults = await Promise.allSettled(
     uniquePoolAddresses.map((poolAddress) =>
-      fetchPoolDiscoveryDetail({ poolAddress, timeframe: VOLATILITY_TIMEFRAME })
-        .then((pool) => ({ poolAddress, volatility: numeric(pool?.volatility) }))
+      fetchPoolDiscoveryDetail({ poolAddress, timeframe: volatilityTimeframe })
+        .then((pool) => ({
+          poolAddress,
+          volatility: numeric(pool?.volatility),
+          volume: numeric(pool?.volume),
+        }))
     )
   );
 
-  const volatilityByPool = new Map();
-  for (const result of volatilityResults) {
+  const metricsByPool = new Map();
+  for (const result of longResults) {
     if (result.status !== "fulfilled") continue;
-    if (result.value.volatility == null) continue;
-    volatilityByPool.set(result.value.poolAddress, result.value.volatility);
+    metricsByPool.set(result.value.poolAddress, result.value);
   }
 
   for (const pool of rawPools) {
-    if (!pool?.pool_address || !volatilityByPool.has(pool.pool_address)) continue;
-    pool.volatility = volatilityByPool.get(pool.pool_address);
-    pool.volatility_timeframe = VOLATILITY_TIMEFRAME;
+    if (!pool?.pool_address) continue;
+    const metrics = metricsByPool.get(pool.pool_address);
+    if (!metrics) continue;
+
+    pool[`volume_${volatilityTimeframe}`] = metrics.volume;
+    pool[`volatility_${volatilityTimeframe}`] = metrics.volatility;
+
+    // Use longer-timeframe values as the canonical ones for filtering
+    if (metrics.volatility != null) pool.volatility = metrics.volatility;
+    if (metrics.volume != null) pool.volume = metrics.volume;
   }
 
   return rawPools;
 }
 
-function numeric(val) {
-  const n = Number(val);
+/**
+ * Refresh live metrics for discord-only signal pools.
+ * Their discovery_pool is a snapshot from when the signal was captured — volume/volatility/fee
+ * can be 0 even if the pool is active right now. We overwrite with fresh data from the
+ * pool discovery API so filtering uses current numbers, not stale ones.
+ */
+async function refreshDiscordOnlyPools(pools, timeframe) {
+  if (!pools.length) return;
+  const FIELDS = ["volume", "fee", "active_tvl", "tvl", "volatility", "fee_active_tvl_ratio"];
+  const results = await Promise.allSettled(
+    pools.map((pool) =>
+      fetchPoolDiscoveryDetail({ poolAddress: pool.pool_address, timeframe })
+        .then((fresh) => ({ pool, fresh }))
+    )
+  );
+  for (const result of results) {
+    if (result.status !== "fulfilled" || !result.value.fresh) continue;
+    const { pool, fresh } = result.value;
+    for (const field of FIELDS) {
+      const val = numeric(fresh[field]);
+      if (val != null) pool[field] = val;
+    }
+    log("screening", `Discord signal refreshed live data: ${pool.name || pool.pool_address} — vol=${pool.volume?.toFixed(0)} fee=${pool.fee?.toFixed(2)}`);
+  }
+}
+
+function numeric(value) {
+  if (value == null) return null;
+  const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
 
@@ -240,8 +299,11 @@ export async function discoverPools({
 
     if (config.screening.discordSignalMode === "only") {
       rawPools = signalPools;
+      // Refresh all signal pools with live data since discovery_pool is a stale snapshot
+      await refreshDiscordOnlyPools(rawPools, s.timeframe);
     } else if (signalPools.length > 0) {
       const byPool = new Map(rawPools.map((pool) => [pool.pool_address, pool]));
+      const discordOnlyPools = [];
       for (const signalPool of signalPools) {
         if (byPool.has(signalPool.pool_address)) {
           byPool.set(signalPool.pool_address, {
@@ -254,9 +316,15 @@ export async function discoverPools({
           });
         } else {
           byPool.set(signalPool.pool_address, signalPool);
+          discordOnlyPools.push(signalPool);
         }
       }
       rawPools = Array.from(byPool.values());
+      // Refresh discord-only pools with live data — their discovery_pool is a stale snapshot
+      // so volume/volatility/fee may be 0 even when the pool is active right now
+      if (discordOnlyPools.length > 0) {
+        await refreshDiscordOnlyPools(discordOnlyPools, s.timeframe);
+      }
     }
   }
 
@@ -571,6 +639,14 @@ function condensePool(p) {
       : (p.active_tvl > 0 ? fix((p.fee / p.active_tvl) * 100, 4) : 0),
     volatility: fix(p.volatility, 4),
     volatility_timeframe: p.volatility_timeframe || VOLATILITY_TIMEFRAME,
+
+    // Per-timeframe breakdown (populated when sourceTimeframe !== volatilityTimeframe)
+    ...(p.volatility_timeframe && p.volatility_timeframe !== config.screening.timeframe ? {
+      [`volume_${config.screening.timeframe}`]: round(p[`volume_${config.screening.timeframe}`] ?? null),
+      [`volume_${p.volatility_timeframe}`]: round(p[`volume_${p.volatility_timeframe}`] ?? null),
+      [`volatility_${config.screening.timeframe}`]: fix(p[`volatility_${config.screening.timeframe}`] ?? null, 4),
+      [`volatility_${p.volatility_timeframe}`]: fix(p[`volatility_${p.volatility_timeframe}`] ?? null, 4),
+    } : {}),
 
 
     // Token health
