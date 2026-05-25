@@ -264,43 +264,13 @@ export async function runManagementCycle({ silent = false } = {}) {
 
       const closeRule = getDeterministicCloseRule(p, config.management);
       if (closeRule) {
-        // Skip if position was already auto-closed by syncOpenPositions
         const tracked = getTrackedPosition(p.position);
         if (tracked?.closed) {
-          log("state", `[Deterministic close] ${p.pair} — already closed via sync, skipping duplicate close`);
-          actionMap.set(p.position, { action: "STAY", deterministicClose: true, alreadyClosed: true });
+          log("state", `[Deterministic close] ${p.pair} — already closed via sync, skipping`);
+          actionMap.set(p.position, { action: "STAY" });
           continue;
         }
-        // ── Deterministic CLOSE: execute directly, no LLM ──────────────────
-        setCloseReason(p.position, closeRule.reason);
-        log("state", `[Deterministic close] ${p.pair} — Rule ${closeRule.rule}: ${closeRule.reason} — executing close_position`);
-        const closeResult = await executeTool("close_position", { position_address: p.position, reason: closeRule.reason });
-        if (closeResult.success) {
-          log("state", `[Deterministic close] ${p.pair} — closed ✅ PnL: ${closeResult.pnl_pct}% ($${closeResult.pnl_usd})`);
-          notifyClose({
-            pair: closeResult.pool_name || p.pair,
-            pnlUsd: closeResult.pnl_usd ?? 0,
-            pnlPct: closeResult.pnl_pct ?? 0,
-            pnlSol: closeResult.pnl_sol ?? null,
-            reason: closeRule.reason,
-            amountSol: closeResult.amount_sol ?? null,
-            strategy: closeResult.strategy ?? null,
-            minutesHeld: closeResult.minutes_held ?? null,
-          }).catch(() => {});
-        } else {
-          log("error", `[Deterministic close] ${p.pair} — failed: ${JSON.stringify(closeResult)}`);
-        }
-        // Mark as STAY to exclude from LLM — already handled. Keep extra data for report.
-        actionMap.set(p.position, {
-          action: "STAY",
-          deterministicClose: true,
-          closeRule: closeRule.rule,
-          closeReason: closeRule.reason,
-          pnl_pct: closeResult.pnl_pct ?? null,
-          pnl_usd: closeResult.pnl_usd ?? null,
-          closeSuccess: closeResult.success,
-          closeError: closeResult.error || closeResult.reason || null,
-        });
+        actionMap.set(p.position, closeRule);
         continue;
       }
       // Claim rule
@@ -331,14 +301,6 @@ export async function runManagementCycle({ silent = false } = {}) {
       if (act.action === "CLOSE" && act.rule === "exit") line += `\n⚡ Trailing TP: ${act.reason}`;
       if (act.action === "CLOSE" && act.rule && act.rule !== "exit") line += `\nRule ${act.rule}: ${act.reason}`;
       if (act.action === "CLAIM") line += `\n→ Claiming fees`;
-      // Deterministic close result
-      if (act.deterministicClose) {
-        if (act.closeSuccess) {
-          line += `\n✅ Rule ${act.closeRule}: ${act.closeReason} — CLOSED (PnL: ${act.pnl_pct}% (${act.pnl_usd != null ? (act.pnl_usd >= 0 ? "+" : "") + "$$" + act.pnl_usd : "?"}))`;
-        } else {
-          line += `\n❌ Rule ${act.closeRule}: ${act.closeReason} — CLOSE FAILED: ${act.closeError}`;
-        }
-      }
       return line;
     });
 
@@ -351,26 +313,10 @@ export async function runManagementCycle({ silent = false } = {}) {
     mgmtReport = reportLines.join("\n\n") +
       `\n\nSummary: 💼 ${positions.length} positions | ${cur}${totalValue.toFixed(4)} | fees: ${cur}${totalUnclaimed.toFixed(4)} | ${actionSummary}`;
 
-    // ── Execute CLOSE actions directly (close_position not in manager LLM tools) ──
-    for (const p of positionData) {
-      const act = actionMap.get(p.position);
-      if (act.action !== "CLOSE") continue;
-      setCloseReason(p.position, act.reason);
-      log("state", `[Exit close] ${p.pair} — Rule ${act.rule}: ${act.reason} — executing close_position`);
-      const closeResult = await executeTool("close_position", { position_address: p.position, reason: act.reason });
-      if (closeResult.success) {
-        log("state", `[Exit close] ${p.pair} — closed ✅ PnL: ${closeResult.pnl_pct}% ($${closeResult.pnl_usd})`);
-        notifyClose({ pair: closeResult.pool_name || p.pair, pnlUsd: closeResult.pnl_usd ?? 0, pnlPct: closeResult.pnl_pct ?? 0, pnlSol: closeResult.pnl_sol ?? null, reason: act.reason, amountSol: closeResult.amount_sol ?? null, strategy: closeResult.strategy ?? null, minutesHeld: closeResult.minutes_held ?? null }).catch(() => {});
-      } else {
-        log("error", `[Exit close] ${p.pair} — close failed: ${JSON.stringify(closeResult)}`);
-      }
-      actionMap.set(p.position, { ...act, executedDirectly: true });
-    }
-
     // ── Call LLM only if action needed ──────────────────────────────
     const actionPositions = positionData.filter(p => {
       const a = actionMap.get(p.position);
-      return a.action !== "STAY" && a.action !== "CLOSE";
+      return a.action !== "STAY";
     });
 
     if (actionPositions.length > 0) {
