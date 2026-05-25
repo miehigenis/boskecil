@@ -11,7 +11,7 @@ import {
 } from "@solana/web3.js";
 import BN from "bn.js";
 import bs58 from "bs58";
-import { config, computeDeployAmount } from "../config.js";
+import { config, computeDeployAmount, MIN_SAFE_BINS_BELOW } from "../config.js";
 import { log } from "../logger.js";
 import {
   trackPosition,
@@ -25,9 +25,9 @@ import {
 } from "../state.js";
 import { recordPerformance } from "../lessons.js";
 import { isBaseMintOnCooldown, isPoolOnCooldown } from "../pool-memory.js";
-import { isWhitelisted } from "../whitelist.js";
-import { normalizeMint, getWalletBalances, swapToken } from "./wallet.js";
+import { normalizeMint } from "./wallet.js";
 import { appendDecision } from "../decision-log.js";
+import { getAndClearStagedSignals } from "../signal-tracker.js";
 
 // ─── Lazy SDK loader ───────────────────────────────────────────
 // @meteora-ag/dlmm → @coral-xyz/anchor uses CJS directory imports
@@ -581,23 +581,27 @@ export async function deployPosition({
 }) {
   pool_address = normalizeMint(pool_address);
   const activeStrategy = strategy || config.strategy.strategy;
-  let activeBinsBelow = bins_below ?? config.strategy.binsBelow;
+  let activeBinsBelow = bins_below ?? config.strategy.defaultBinsBelow ?? config.strategy.minBinsBelow;
   let activeBinsAbove = bins_above ?? 0;
+  const parsedVolatility = volatility == null ? null : Number(volatility);
+  const normalizedVolatility = parsedVolatility != null && Number.isFinite(parsedVolatility) ? parsedVolatility : null;
+
+  if (volatility != null && (normalizedVolatility == null || normalizedVolatility <= 0)) {
+    throw new Error(`Invalid volatility ${volatility} — refusing deploy because the volatility feed is unusable.`);
+  }
+
+  if (isPoolOnCooldown(pool_address)) {
+    log("deploy", `Pool ${pool_address.slice(0, 8)} is on cooldown — skipping`);
+    return { success: false, error: "Pool on cooldown — was recently closed with a cooldown reason. Try a different pool." };
+  }
 
   const { StrategyType, getBinIdFromPrice, getPriceOfBinByBinId } = await getDLMM();
   const pool = await getPool(pool_address);
   const baseMint = pool.lbPair.tokenXMint.toString();
-
-  // Pool-memory cooldown checks — whitelist bypass is handled inside these functions
-  if (isPoolOnCooldown(pool_address, baseMint)) {
-    log("deploy", `Pool ${pool_address.slice(0, 8)} is on cooldown — skipping`);
-    return { success: false, error: "Pool on cooldown — was recently closed with a cooldown reason. Try a different pool." };
-  }
   if (isBaseMintOnCooldown(baseMint)) {
     log("deploy", `Base mint ${baseMint.slice(0, 8)} is on cooldown — skipping deploy for pool ${pool_address.slice(0, 8)}`);
     return { success: false, error: "Token on cooldown — recently closed out-of-range too many times. Try a different token." };
   }
-
   const activeBin = await pool.getActiveBin();
   const actualBinStep = pool.lbPair.binStep;
   const activePrice = Number(getPriceOfBinByBinId(activeBin.binId, actualBinStep).toString());
@@ -622,23 +626,49 @@ export async function deployPosition({
     activeBinsAbove = Math.max(0, upperBinId - activeBin.binId);
   }
 
-  if (process.env.DRY_RUN === "true") {
-    const totalBins = activeBinsBelow + activeBinsAbove;
-    return {
-      dry_run: true,
-      would_deploy: {
-        pool_address,
-        strategy: activeStrategy,
-        bins_below: activeBinsBelow,
-        bins_above: activeBinsAbove,
-        downside_pct: downside_pct ?? null,
-        upside_pct: upside_pct ?? null,
-        amount_x: amount_x || 0,
-        amount_y: amount_y || amount_sol || 0,
-        wide_range: totalBins > 69,
-      },
-      message: "DRY RUN — no transaction sent",
-    };
+  // Calculate amounts
+  // If no explicit SOL amount is provided, fall back to the configured dynamic deploy size.
+  const fallbackAmountY =
+    amount_y == null && amount_sol == null
+      ? computeDeployAmount((await getWalletBalances()).sol)
+      : 0;
+  const finalAmountY = Number(amount_y ?? amount_sol ?? fallbackAmountY);
+  const finalAmountX = Number(amount_x ?? 0);
+  if (!Number.isFinite(finalAmountY) || !Number.isFinite(finalAmountX) || finalAmountY < 0 || finalAmountX < 0) {
+    throw new Error("Invalid deploy amount: amount_x and amount_y must be valid non-negative numbers.");
+  }
+  if (finalAmountX > 0) {
+    throw new Error("Unsupported deploy amount: this agent only supports single-side SOL deploys. Use amount_y/amount_sol and keep amount_x=0.");
+  }
+  if (finalAmountY <= 0) {
+    throw new Error("Invalid deploy amount: provide a positive amount_y/amount_sol.");
+  }
+  const isSingleSidedSol = finalAmountX <= 0 && finalAmountY > 0;
+  if (isSingleSidedSol && (Number(bins_above ?? 0) > 0 || Number(upside_pct ?? 0) > 0)) {
+    throw new Error(
+      "Single-side SOL deploy cannot use bins_above or upside_pct. Use amount_y with bins_below only; the upper bin is the SDK active bin.",
+    );
+  }
+  if (isSingleSidedSol) {
+    activeBinsAbove = 0;
+  }
+  activeBinsBelow = Number(activeBinsBelow);
+  activeBinsAbove = Number(activeBinsAbove);
+  if (!Number.isFinite(activeBinsBelow) || !Number.isFinite(activeBinsAbove)) {
+    throw new Error("Invalid bin range: bins_below and bins_above must be valid numbers.");
+  }
+  if (activeBinsBelow < 0 || activeBinsAbove < 0) {
+    throw new Error("Invalid bin range: bins_below and bins_above cannot be negative.");
+  }
+  if (!Number.isInteger(activeBinsBelow) || !Number.isInteger(activeBinsAbove)) {
+    throw new Error("Invalid bin range: bins_below and bins_above must be whole-bin integers.");
+  }
+  const minBinsBelow = Math.max(MIN_SAFE_BINS_BELOW, Number(config.strategy.minBinsBelow ?? MIN_SAFE_BINS_BELOW));
+  const totalBins = activeBinsBelow + activeBinsAbove;
+  if (totalBins < minBinsBelow) {
+    throw new Error(
+      `Invalid deploy range: total bins ${totalBins} is below minimum ${minBinsBelow}. Refusing 1-bin/tiny-range deploy.`,
+    );
   }
 
   const strategyMap = {
@@ -652,26 +682,26 @@ export async function deployPosition({
     throw new Error(`Invalid strategy: ${activeStrategy}. Use spot, curve, or bid_ask.`);
   }
 
-  // Calculate amounts
-  // If no explicit SOL amount is provided, fall back to the configured dynamic deploy size.
-  const fallbackAmountY =
-    amount_y == null && amount_sol == null
-      ? computeDeployAmount((await getWalletBalances()).sol)
-      : 0;
-  const finalAmountY = amount_y ?? amount_sol ?? fallbackAmountY;
-  const finalAmountX = amount_x ?? 0;
-  const isSingleSidedSol = finalAmountX <= 0 && finalAmountY > 0;
-  if (isSingleSidedSol && (Number(bins_above ?? 0) > 0 || Number(upside_pct ?? 0) > 0)) {
-    throw new Error(
-      "Single-side SOL deploy cannot use bins_above or upside_pct. Use amount_y with bins_below only; the upper bin is the SDK active bin.",
-    );
+  if (process.env.DRY_RUN === "true") {
+    return {
+      dry_run: true,
+      would_deploy: {
+        pool_address,
+        strategy: activeStrategy,
+        bins_below: activeBinsBelow,
+        bins_above: activeBinsAbove,
+        downside_pct: downside_pct ?? null,
+        upside_pct: upside_pct ?? null,
+        amount_x: finalAmountX,
+        amount_y: finalAmountY,
+        wide_range: totalBins > 69,
+      },
+      message: "DRY RUN — no transaction sent",
+    };
   }
-  if (isSingleSidedSol) {
-    activeBinsAbove = 0;
-  }
-  let totalBins = activeBinsBelow + activeBinsAbove;
-  let isWideRange = totalBins > 69;
-  let minBinId = activeBin.binId - activeBinsBelow;
+
+  const isWideRange = totalBins > 69;
+  const minBinId = activeBin.binId - activeBinsBelow;
   const maxBinId = isSingleSidedSol ? activeBin.binId : activeBin.binId + activeBinsAbove;
 
   if (minBinId > maxBinId) {
@@ -683,33 +713,7 @@ export async function deployPosition({
     );
   }
 
-  // Reduce bins_below step-by-step until range fits within already-initialized bin arrays.
-  // Avoids non-refundable bin-array rent when deploying into a wide uninitialized range.
-  const originalBinsBelow = activeBinsBelow;
-      const floorBinsBelow = actualBinStep === 50 ? 139 : actualBinStep === 80 ? 131 : actualBinStep === 100 ? 105 : actualBinStep === 125 ? 85 : (config.strategy.minBinsBelow ?? 69);
-  const BIN_REDUCE_STEP = 10;
-  while (true) {
-    try {
-      await assertRangeDoesNotRequireBinArrayInitialization(pool, minBinId, maxBinId);
-      break;
-    } catch (_initErr) {
-      const next = activeBinsBelow - BIN_REDUCE_STEP;
-      if (next < floorBinsBelow) {
-        throw new Error(
-          `Deploy skipped: no initialized bin-array range found between floor ${floorBinsBelow} and ${originalBinsBelow} bins_below. ` +
-          `Try a different pool or wait for bin arrays to be initialized.`,
-        );
-      }
-      log("deploy", `bins_below ${activeBinsBelow}→${next}: range requires bin-array init, reducing to avoid non-refundable rent`);
-      activeBinsBelow = next;
-      minBinId = activeBin.binId - activeBinsBelow;
-      totalBins = activeBinsBelow + activeBinsAbove;
-      isWideRange = totalBins > 69;
-    }
-  }
-  if (activeBinsBelow !== originalBinsBelow) {
-    log("deploy", `bins_below reduced from ${originalBinsBelow} to ${activeBinsBelow} (avoided bin-array initialization cost)`);
-  }
+  await assertRangeDoesNotRequireBinArrayInitialization(pool, minBinId, maxBinId);
 
   const minPrice = Number(getPriceOfBinByBinId(minBinId, actualBinStep).toString());
   const maxPrice = Number(getPriceOfBinByBinId(maxBinId, actualBinStep).toString());
@@ -793,6 +797,9 @@ export async function deployPosition({
 
       const positionAddress = matching?.position || null;
       if (positionAddress) {
+        const signalSnapshot = config.darwin?.enabled
+          ? getAndClearStagedSignals(pool_address, baseMint)
+          : null;
         trackPosition({
           position: positionAddress,
           pool: pool_address,
@@ -800,13 +807,14 @@ export async function deployPosition({
           strategy: activeStrategy,
           bin_range: { min: minBinId, max: maxBinId, bins_below: activeBinsBelow, bins_above: activeBinsAbove },
           bin_step,
-          volatility,
+          volatility: normalizedVolatility,
           fee_tvl_ratio,
           organic_score,
           amount_sol: finalAmountY,
           amount_x: finalAmountX,
           active_bin: activeBin.binId,
           initial_value_usd,
+          signal_snapshot: signalSnapshot,
         });
       }
 
@@ -819,7 +827,7 @@ export async function deployPosition({
         summary: `Relay deployed ${finalAmountY} SOL with ${activeStrategy}`,
         reason: `Chosen range ${minBinId}→${maxBinId} around active bin ${activeBin.binId}`,
         risks: [
-          volatility != null ? `volatility ${volatility}` : null,
+          normalizedVolatility != null ? `volatility ${normalizedVolatility}` : null,
           fee_tvl_ratio != null ? `fee/TVL ${fee_tvl_ratio}%` : null,
         ].filter(Boolean),
         metrics: {
@@ -895,22 +903,6 @@ export async function deployPosition({
         log("deploy", `Create tx ${i + 1}/${createTxArray.length}: ${txHash}`);
       }
 
-      // Phase 1.5: Pre-initialize any missing bin arrays for the full range.
-      // chunkDepositWithRebalanceEndpoint generates initBinArray ixs per-chunk but within
-      // the same tx as rebalanceLiquidity. If a bin array for chunk N is missing AND the
-      // on-chain program needs it before init completes (e.g. for adjacent-bin fee accounting),
-      // rebalance fails with InvalidBinArray. Sending init as a separate prior tx avoids this.
-      if (_getBinArrayIndexesCoverage) {
-        const allBinArrayIndexes = _getBinArrayIndexesCoverage(new BN(minBinId), new BN(maxBinId));
-        const initIxs = await pool.initializeBinArrays(allBinArrayIndexes, wallet.publicKey);
-        if (initIxs.length > 0) {
-          const initTx = new Transaction().add(...initIxs);
-          const initHash = await sendAndConfirmTransaction(getConnection(), initTx, [wallet]);
-          txHashes.push(initHash);
-          log("deploy", `Pre-init bin arrays tx (${allBinArrayIndexes.length} indexes, ${initIxs.length} missing): ${initHash}`);
-        }
-      }
-
       // Phase 2: Add liquidity (may be multiple txs)
       const addTxs = await pool.addLiquidityByStrategyChunkable({
         positionPubKey: newPosition.publicKey,
@@ -921,61 +913,13 @@ export async function deployPosition({
         slippage: 10, // 10%
       });
       const addTxArray = Array.isArray(addTxs) ? addTxs : [addTxs];
-      const failedTxs = [];
       for (let i = 0; i < addTxArray.length; i++) {
-        try {
-          const txHash = await sendAndConfirmTransaction(getConnection(), addTxArray[i], [wallet]);
-          txHashes.push(txHash);
-          log("deploy", `Add liquidity tx ${i + 1}/${addTxArray.length}: ${txHash}`);
-        } catch (error) {
-          log("deploy_error", `Add liquidity tx ${i + 1}/${addTxArray.length} failed: ${error.message}`);
-          failedTxs.push(i + 1);
-          continue; // Don't abort — continue processing remaining txs
-        }
-      }
-
-      // Recovery: if some txs failed but position was created (tx1 succeeded), add remaining liquidity
-      if (failedTxs.length > 0) {
-        log("deploy", `${failedTxs.length}/${addTxArray.length} add liquidity tx(s) failed: [${failedTxs.join(", ")}]`);
-        // Position may exist — verify and attempt recovery
-        const refreshed = await getMyPositions({ force: true, silent: true }).catch(() => null);
-        const positionExists = refreshed?.positions?.find((p) => p.pool === pool_address);
-        if (positionExists) {
-          // Calculate remaining SOL based on failed fraction
-          const failedFraction = failedTxs.length / addTxArray.length;
-          const remainingSol = finalAmountY * failedFraction;
-          const remainingLamports = Math.floor(remainingSol * 1e9);
-          log("deploy", `Position exists with partial liquidity. Attempting recovery add: ${remainingSol.toFixed(4)} SOL (${failedFraction * 100}% missing)`);
-          try {
-            const addRemainingTx = await pool.addLiquidityByStrategy({
-              positionPubKey: newPosition.publicKey,
-              user: wallet.publicKey,
-              totalXAmount: new BN(0),
-              totalYAmount: new BN(remainingLamports),
-              strategy: { maxBinId, minBinId, strategyType },
-              slippage: 1000,
-            });
-            const recoveryHash = await sendAndConfirmTransaction(getConnection(), addRemainingTx, [wallet]);
-            txHashes.push(recoveryHash);
-            log("deploy", `Recovery add liquidity tx: ${recoveryHash}`);
-          } catch (recoveryError) {
-            log("deploy_error", `Recovery add liquidity failed: ${recoveryError.message} — position remains partial`);
-          }
-        } else {
-          log("deploy_error", "Position was not created — cannot recover");
-        }
+        const txHash = await sendAndConfirmTransaction(getConnection(), addTxArray[i], [wallet]);
+        txHashes.push(txHash);
+        log("deploy", `Add liquidity tx ${i + 1}/${addTxArray.length}: ${txHash}`);
       }
     } else {
       // ── Standard Path (≤69 bins) ─────────────────────────────────
-      // Preflight: verify wallet balance can cover tx + fees + reserve
-      const preflightBalStd = await getConnection().getBalance(wallet.publicKey);
-      const gasReserveLamportsStd = Math.floor(config.management.gasReserve * 1e9);
-      const estimatedFeeLamportsStd = 5000;
-      const preflightAvailableStd = preflightBalStd - gasReserveLamportsStd - estimatedFeeLamportsStd;
-      if (preflightAvailableStd <= 0) {
-        throw new Error(`Insufficient balance for deploy. Have ${(preflightBalStd / 1e9).toFixed(3)} SOL, need at least ${((gasReserveLamportsStd + estimatedFeeLamportsStd) / 1e9).toFixed(3)} SOL after reserve.`);
-      }
-
       const tx = await pool.initializePositionAndAddLiquidityByStrategy({
         positionPubKey: newPosition.publicKey,
         user: wallet.publicKey,
@@ -991,6 +935,9 @@ export async function deployPosition({
     log("deploy", `SUCCESS — ${txHashes.length} tx(s): ${txHashes[0]}`);
 
     _positionsCacheAt = 0;
+    const signalSnapshot = config.darwin?.enabled
+      ? getAndClearStagedSignals(pool_address, baseMint)
+      : null;
     trackPosition({
       position: newPosition.publicKey.toString(),
       pool: pool_address,
@@ -998,13 +945,14 @@ export async function deployPosition({
       strategy: activeStrategy,
       bin_range: { min: minBinId, max: maxBinId, bins_below: activeBinsBelow, bins_above: activeBinsAbove },
       bin_step,
-      volatility,
+      volatility: normalizedVolatility,
       fee_tvl_ratio,
       organic_score,
       amount_sol: finalAmountY,
       amount_x: finalAmountX,
       active_bin: activeBin.binId,
       initial_value_usd,
+      signal_snapshot: signalSnapshot,
     });
 
     appendDecision({
@@ -1016,7 +964,7 @@ export async function deployPosition({
       summary: `Deployed ${finalAmountY} SOL with ${activeStrategy}`,
       reason: `Chosen range ${minBinId}→${maxBinId} around active bin ${activeBin.binId}`,
       risks: [
-        volatility != null ? `volatility ${volatility}` : null,
+        normalizedVolatility != null ? `volatility ${normalizedVolatility}` : null,
         fee_tvl_ratio != null ? `fee/TVL ${fee_tvl_ratio}%` : null,
       ].filter(Boolean),
       metrics: {
@@ -1127,10 +1075,7 @@ export async function getPositionPnl({ pool_address, position_address }) {
   const walletAddress = getWallet().publicKey.toString();
   if (shouldUseLpAgentRelay()) {
     try {
-      const payload = await fetchOpenPositionsFromMeridian({
-        walletAddress,
-        agentId: config.hiveMind.agentId || "agent-local",
-      });
+      const payload = await getMyPositions({ force: true, silent: true });
       const p = payload?.positions?.find((position) => position.position === position_address);
       if (p) {
         return {
@@ -1145,7 +1090,7 @@ export async function getPositionPnl({ pool_address, position_address }) {
           upper_bin: p.upper_bin,
           active_bin: p.active_bin,
           age_minutes: p.age_minutes,
-          request_id: payload?.requestId || null,
+          request_id: payload?.request_id || null,
         };
       }
       log("pnl_warn", "Relay positions API did not include requested position; falling back to Meteora PnL path");
@@ -1158,14 +1103,23 @@ export async function getPositionPnl({ pool_address, position_address }) {
     const p = byAddress[position_address];
     if (!p) return { error: "Position not found in PnL API" };
 
-    const unclaimedUsd    = parseFloat(p.unrealizedPnl?.unclaimedFeeTokenX?.usd || 0) + parseFloat(p.unrealizedPnl?.unclaimedFeeTokenY?.usd || 0);
-    const currentValueUsd = parseFloat(p.unrealizedPnl?.balances || 0);
+    const solMode = config.management.solMode;
+    const unclaimedValue = solMode
+      ? safeNum(p.unrealizedPnl?.unclaimedFeeTokenX?.amountSol) + safeNum(p.unrealizedPnl?.unclaimedFeeTokenY?.amountSol)
+      : safeNum(p.unrealizedPnl?.unclaimedFeeTokenX?.usd) + safeNum(p.unrealizedPnl?.unclaimedFeeTokenY?.usd);
+    const currentValue = solMode
+      ? safeNum(p.unrealizedPnl?.balancesSol)
+      : safeNum(p.unrealizedPnl?.balances);
+    const reportedPnlPct = solMode
+      ? maybeNum(p.pnlSolPctChange)
+      : maybeNum(p.pnlPctChange);
+    const derivedPnlPct = deriveOpenPnlPct(p, solMode);
     return {
-      pnl_usd:           Math.round((p.pnlUsd ?? 0) * 100) / 100,
-      pnl_pct:           Math.round((p.pnlPctChange ?? 0) * 100) / 100,
-      current_value_usd: Math.round(currentValueUsd * 100) / 100,
-      unclaimed_fee_usd: Math.round(unclaimedUsd * 100) / 100,
-      all_time_fees_usd: Math.round(parseFloat(p.allTimeFees?.total?.usd || 0) * 100) / 100,
+      pnl_usd:           roundNum(solMode ? p.pnlSol : p.pnlUsd, 4),
+      pnl_pct:           roundNum(reportedPnlPct ?? derivedPnlPct ?? 0, 2),
+      current_value_usd: roundNum(currentValue, 4),
+      unclaimed_fee_usd: roundNum(unclaimedValue, 4),
+      all_time_fees_usd: roundNum(solMode ? p.allTimeFees?.total?.sol : p.allTimeFees?.total?.usd, 4),
       fee_per_tvl_24h:   Math.round(parseFloat(p.feePerTvl24h || 0) * 100) / 100,
       in_range:    !p.isOutOfRange,
       lower_bin:   p.lowerBinId      ?? null,
@@ -1184,24 +1138,68 @@ function safeNum(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function normalizeRelayPosition(position) {
-  if (!position || typeof position !== "object") return position;
-  if (!config.management.solMode) return position;
+function maybeNum(value) {
+  if (value == null || value === "") return null;
+  const n = parseFloat(value);
+  return Number.isFinite(n) ? n : null;
+}
 
-  const totalValueNative = position.total_value_native ?? position.total_value_usd;
-  const unclaimedFeesNative = position.unclaimed_fees_native ?? position.unclaimed_fees_usd;
-  const collectedFeesNative = position.collected_fees_native ?? position.collected_fees_usd;
-  const pnlNative = position.pnl_native ?? position.pnl_usd;
-  const derivedPnlPct = position.pnl_pct_derived_native ?? position.pnl_pct_derived;
+function roundNum(value, decimals = 4) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  const factor = 10 ** decimals;
+  return Math.round(n * factor) / factor;
+}
 
-  return {
-    ...position,
-    total_value_usd: totalValueNative,
-    unclaimed_fees_usd: unclaimedFeesNative,
-    collected_fees_usd: collectedFeesNative,
-    pnl_usd: pnlNative,
-    pnl_pct_derived: derivedPnlPct,
+const PERFORMANCE_SIGNAL_FIELDS = [
+  "organic_score",
+  "fee_tvl_ratio",
+  "volume",
+  "mcap",
+  "holder_count",
+  "smart_wallets_present",
+  "narrative_quality",
+  "study_win_rate",
+  "hive_consensus",
+  "volatility",
+];
+
+function resolvePerformanceSignalSnapshot({ poolAddress, baseMint, tracked }) {
+  const staged = config.darwin?.enabled
+    ? getAndClearStagedSignals(poolAddress, baseMint)
+    : null;
+  const snapshot = {
+    ...(staged || {}),
+    ...(tracked?.signal_snapshot || {}),
   };
+
+  if (baseMint && snapshot.base_mint == null) snapshot.base_mint = baseMint;
+  for (const field of PERFORMANCE_SIGNAL_FIELDS) {
+    if (snapshot[field] == null && tracked?.[field] != null) {
+      snapshot[field] = tracked[field];
+    }
+  }
+
+  return Object.values(snapshot).some((value) => value != null) ? snapshot : null;
+}
+
+function getClosedPnlValue(posEntry, solMode = false) {
+  return solMode
+    ? maybeNum(posEntry?.pnlSol) ?? maybeNum(posEntry?.pnl?.valueNative) ?? 0
+    : maybeNum(posEntry?.pnlUsd) ?? maybeNum(posEntry?.pnl?.value) ?? 0;
+}
+
+function getClosedPnlPct(posEntry, solMode = false) {
+  const reported = solMode
+    ? maybeNum(posEntry?.pnlSolPctChange) ?? maybeNum(posEntry?.pnl?.percentNative)
+    : maybeNum(posEntry?.pnlPctChange) ?? maybeNum(posEntry?.pnl?.percent);
+  if (reported != null) return reported;
+
+  const pnl = getClosedPnlValue(posEntry, solMode);
+  const deposit = solMode
+    ? maybeNum(posEntry?.allTimeDeposits?.total?.sol)
+    : maybeNum(posEntry?.allTimeDeposits?.total?.usd);
+  return deposit && deposit > 0 ? (pnl / deposit) * 100 : 0;
 }
 
 function deriveOpenPnlPct(binData, solMode = false) {
@@ -1240,60 +1238,67 @@ function deriveLpAgentPnlPct(lpData, solMode = false) {
   return (pnl / deposit) * 100;
 }
 
-async function fetchOpenPositionsFromMeridian({ walletAddress, agentId }) {
+async function fetchRawOpenPositionsFromMeridian({ walletAddress, agentId }) {
   const search = new URLSearchParams({
     owner: walletAddress,
     agentId: agentId || "agent-local",
   });
-  const payload = await meridianJson(`/positions/open?${search.toString()}`, {
+  const payload = await meridianJson(`/positions/open/raw?${search.toString()}`, {
     headers: config.api.publicApiKey ? { "x-api-key": config.api.publicApiKey } : {},
     retry: {
       maxElapsedMs: 30_000,
       perAttemptTimeoutMs: 30_000,
     },
   });
+  const rows = Array.isArray(payload?.data) ? payload.data : [];
+  const byPosition = {};
+  for (const row of rows) {
+    const addr = row?.position || row?.id || row?.tokenId;
+    if (addr) byPosition[addr] = row;
+  }
   return {
     ...payload,
-    positions: Array.isArray(payload?.positions)
-      ? payload.positions.map((position) => normalizeRelayPosition(position))
-      : [],
+    data: rows,
+    byPosition,
   };
 }
 
 // ─── Get My Positions ──────────────────────────────────────────
-export async function getMyPositions({ force = false, silent = false, skipSync = false } = {}) {
-  if (!force && _positionsCache && Date.now() - _positionsCacheAt < POSITIONS_CACHE_TTL) {
+export async function getMyPositions({ force = false, silent = false, wallet_address = null } = {}) {
+  let walletOverride = null;
+  try {
+    walletOverride = wallet_address ? new PublicKey(wallet_address).toString() : null;
+  } catch {
+    return { wallet: wallet_address || null, total_positions: 0, positions: [], error: "Invalid wallet address" };
+  }
+
+  const useLocalWallet = !walletOverride;
+  if (useLocalWallet && !force && _positionsCache && Date.now() - _positionsCacheAt < POSITIONS_CACHE_TTL) {
     return _positionsCache;
   }
-  if (_positionsInflight) return _positionsInflight;
+  if (useLocalWallet && _positionsInflight) return _positionsInflight;
 
   let walletAddress;
   try {
-    walletAddress = getWallet().publicKey.toString();
+    walletAddress = walletOverride || getWallet().publicKey.toString();
   } catch {
     return { wallet: null, total_positions: 0, positions: [], error: "Wallet not configured" };
   }
 
-  _positionsInflight = (async () => { try {
+  const loadPositions = async () => { try {
+    let relayLpAgentByPosition = null;
+    let relayRequestId = null;
     if (shouldUseLpAgentRelay()) {
       try {
-        if (!silent) log("positions", "Fetching open positions via Agent Meridian relay...");
-        const result = await fetchOpenPositionsFromMeridian({
+        if (!silent) log("positions", "Fetching raw LPAgent open positions via Agent Meridian relay...");
+        const result = await fetchRawOpenPositionsFromMeridian({
           walletAddress,
           agentId: config.hiveMind.agentId || "agent-local",
         });
-        const normalizedPositions = Array.isArray(result.positions) ? result.positions : [];
-        if (!skipSync) await syncOpenPositions(normalizedPositions.map((p) => p.position));
-        _positionsCache = {
-          wallet: walletAddress,
-          total_positions: Number(result.total_positions || 0),
-          positions: normalizedPositions,
-          request_id: result.requestId || null,
-        };
-        _positionsCacheAt = Date.now();
-        return _positionsCache;
+        relayLpAgentByPosition = result.byPosition || {};
+        relayRequestId = result.requestId || result.request_id || null;
       } catch (error) {
-        log("positions_warn", `Agent Meridian relay failed; falling back to Meteora/local positions path: ${error.message}`);
+        log("positions_warn", `Agent Meridian raw relay failed; falling back to direct LPAgent fetch: ${error.message}`);
       }
     }
 
@@ -1313,7 +1318,7 @@ export async function getMyPositions({ force = false, silent = false, skipSync =
     const binDataByPool = {};
     const pnlMaps = await Promise.all(pools.map(pool => fetchDlmmPnlForPool(pool.poolAddress, walletAddress)));
     pools.forEach((pool, i) => { binDataByPool[pool.poolAddress] = pnlMaps[i]; });
-    const lpAgentByPosition = await fetchLpAgentOpenPositions(walletAddress);
+    const lpAgentByPosition = relayLpAgentByPosition || await fetchLpAgentOpenPositions(walletAddress);
 
     const positions = [];
     for (const pool of pools) {
@@ -1445,19 +1450,32 @@ export async function getMyPositions({ force = false, silent = false, skipSync =
       }
     }
 
-    const result = { wallet: walletAddress, total_positions: positions.length, positions };
-    if (!skipSync) await syncOpenPositions(positions.map(p => p.position));
-    _positionsCache = result;
-    _positionsCacheAt = Date.now();
+    const result = {
+      wallet: walletAddress,
+      total_positions: positions.length,
+      positions,
+      request_id: relayRequestId,
+    };
+    if (useLocalWallet) {
+      syncOpenPositions(positions.map(p => p.position));
+      _positionsCache = result;
+      _positionsCacheAt = Date.now();
+    }
     return result;
   } catch (error) {
     log("positions_error", `Portfolio fetch failed: ${error.stack || error.message}`);
     return { wallet: walletAddress, total_positions: 0, positions: [], error: error.message };
   } finally {
-    _positionsInflight = null;
+    if (useLocalWallet) _positionsInflight = null;
   }
-  })();
-  return _positionsInflight;
+  };
+
+  if (useLocalWallet) {
+    _positionsInflight = loadPositions();
+    return _positionsInflight;
+  }
+
+  return loadPositions();
 }
 
 // ─── Get Positions for Any Wallet ─────────────────────────────
@@ -1486,6 +1504,23 @@ export async function getWalletPositions({ wallet_address }) {
 
     const positions = raw.map((r) => {
       const p = pnlByPool[r.pool]?.[r.position] || null;
+      const solMode = config.management.solMode;
+      const unclaimedValue = p
+        ? solMode
+          ? safeNum(p.unrealizedPnl?.unclaimedFeeTokenX?.amountSol) + safeNum(p.unrealizedPnl?.unclaimedFeeTokenY?.amountSol)
+          : safeNum(p.unrealizedPnl?.unclaimedFeeTokenX?.usd) + safeNum(p.unrealizedPnl?.unclaimedFeeTokenY?.usd)
+        : 0;
+      const currentValue = p
+        ? solMode
+          ? safeNum(p.unrealizedPnl?.balancesSol)
+          : safeNum(p.unrealizedPnl?.balances)
+        : 0;
+      const reportedPnlPct = p
+        ? solMode
+          ? maybeNum(p.pnlSolPctChange)
+          : maybeNum(p.pnlPctChange)
+        : null;
+      const derivedPnlPct = p ? deriveOpenPnlPct(p, solMode) : null;
 
       return {
         position:           r.position,
@@ -1494,10 +1529,10 @@ export async function getWalletPositions({ wallet_address }) {
         upper_bin:          p?.upperBinId      ?? null,
         active_bin:         p?.poolActiveBinId ?? null,
         in_range:           p ? !p.isOutOfRange : null,
-        unclaimed_fees_usd: Math.round((p ? (parseFloat(p.unrealizedPnl?.unclaimedFeeTokenX?.usd || 0) + parseFloat(p.unrealizedPnl?.unclaimedFeeTokenY?.usd || 0)) : 0) * 100) / 100,
-        total_value_usd:    Math.round((p ? parseFloat(p.unrealizedPnl?.balances || 0) : 0) * 100) / 100,
-        pnl_usd:            Math.round((p?.pnlUsd ?? 0) * 100) / 100,
-        pnl_pct:            Math.round((p?.pnlPctChange ?? 0) * 100) / 100,
+        unclaimed_fees_usd: roundNum(unclaimedValue, 4),
+        total_value_usd:    roundNum(currentValue, 4),
+        pnl_usd:            roundNum(p ? (solMode ? p.pnlSol : p.pnlUsd) : 0, 4),
+        pnl_pct:            roundNum(reportedPnlPct ?? derivedPnlPct ?? 0, 2),
         age_minutes:        p?.createdAt ? Math.floor((Date.now() - p.createdAt * 1000) / 60000) : null,
       };
     });
@@ -1668,7 +1703,7 @@ export async function closePosition({ position_address, reason }) {
         let closedConfirmed = false;
         for (let attempt = 0; attempt < 4; attempt++) {
           try {
-            const refreshed = await getMyPositions({ force: true, silent: true, skipSync: true });
+            const refreshed = await getMyPositions({ force: true, silent: true });
             const stillOpen = refreshed?.positions?.some((p) => p.position === position_address);
             if (!stillOpen) {
               closedConfirmed = true;
@@ -1689,7 +1724,6 @@ export async function closePosition({ position_address, reason }) {
             pool: poolAddress,
             close_txs: closeTxHashes,
             txs: txHashes,
-            reason: reason || null,
           };
         }
 
@@ -1704,6 +1738,7 @@ export async function closePosition({ position_address, reason }) {
           }
 
           let pnlUsd = 0;
+          let pnlTrueUsd = 0;
           let pnlPct = 0;
           let finalValueUsd = 0;
           let initialUsd = 0;
@@ -1716,8 +1751,9 @@ export async function closePosition({ position_address, reason }) {
                 const data = await res.json();
                 const posEntry = (data.positions || []).find((entry) => entry.positionAddress === position_address);
                 if (posEntry) {
-                  pnlUsd = parseFloat(posEntry.pnlUsd || 0);
-                  pnlPct = parseFloat(posEntry.pnlPctChange || 0);
+                  pnlTrueUsd = safeNum(posEntry.pnlUsd);
+                  pnlUsd = config.management.solMode ? getClosedPnlValue(posEntry, true) : pnlTrueUsd;
+                  pnlPct = getClosedPnlPct(posEntry, config.management.solMode);
                   finalValueUsd = parseFloat(posEntry.allTimeWithdrawals?.total?.usd || 0);
                   initialUsd = parseFloat(posEntry.allTimeDeposits?.total?.usd || 0);
                   feesUsd = parseFloat(posEntry.allTimeFees?.total?.usd || 0) || feesUsd;
@@ -1730,15 +1766,22 @@ export async function closePosition({ position_address, reason }) {
             log("close_warn", `Relay closed PnL fetch failed: ${e.message}`);
           }
 
+          const closeBaseMint = livePosition?.base_mint || pool.lbPair.tokenXMint.toString();
+          const signalSnapshot = resolvePerformanceSignalSnapshot({
+            poolAddress,
+            baseMint: closeBaseMint,
+            tracked,
+          });
+
           await recordPerformance({
             position: position_address,
             pool: poolAddress,
             pool_name: tracked.pool_name || poolMeta.name || poolAddress.slice(0, 8),
-            base_mint: livePosition?.base_mint || null,
+            base_mint: closeBaseMint,
             strategy: tracked.strategy,
             bin_range: tracked.bin_range,
             bin_step: tracked.bin_step || null,
-            volatility: tracked.volatility || null,
+            volatility: tracked.volatility ?? null,
             fee_tvl_ratio: tracked.fee_tvl_ratio || null,
             organic_score: tracked.organic_score || null,
             amount_sol: tracked.amount_sol,
@@ -1748,6 +1791,7 @@ export async function closePosition({ position_address, reason }) {
             minutes_in_range: minutesHeld - minutesOOR,
             minutes_held: minutesHeld,
             close_reason: reason || "agent decision",
+            signal_snapshot: signalSnapshot,
           });
 
           appendDecision({
@@ -1782,8 +1826,7 @@ export async function closePosition({ position_address, reason }) {
             txs: txHashes,
             pnl_usd: pnlUsd,
             pnl_pct: pnlPct,
-            base_mint: livePosition?.base_mint || null,
-            reason: reason || null,
+            base_mint: closeBaseMint,
           };
         }
 
@@ -1798,22 +1841,19 @@ export async function closePosition({ position_address, reason }) {
           metrics: {},
         });
 
-          return {
-            success: true,
-            relay: true,
-            request_id: order.requestId,
-            position: position_address,
-            pool: poolAddress,
-            pool_name: poolMeta.name || null,
-            claim_txs: claimTxHashes,
-            close_txs: closeTxHashes,
-            txs: txHashes,
-            pnl_usd: pnlUsd ?? null,
-            pnl_pct: pnlPct ?? null,
-            base_mint: livePosition?.base_mint || null,
-            reason: reason || null,
-          };
-        } catch (relayError) {
+        return {
+          success: true,
+          relay: true,
+          request_id: order.requestId,
+          position: position_address,
+          pool: poolAddress,
+          pool_name: poolMeta.name || null,
+          claim_txs: claimTxHashes,
+          close_txs: closeTxHashes,
+          txs: txHashes,
+          base_mint: livePosition?.base_mint || null,
+        };
+      } catch (relayError) {
         if (relaySubmitted) throw relayError;
         log("close_warn", `Relay zap-out failed before submit; falling back to local close + Jupiter autoswap: ${relayError.message}`);
       }
@@ -1903,7 +1943,7 @@ export async function closePosition({ position_address, reason }) {
     let closedConfirmed = false;
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
-        const refreshed = await getMyPositions({ force: true, silent: true, skipSync: true });
+        const refreshed = await getMyPositions({ force: true, silent: true });
         const stillOpen = refreshed?.positions?.some((p) => p.position === position_address);
         if (!stillOpen) {
           closedConfirmed = true;
@@ -1951,6 +1991,7 @@ export async function closePosition({ position_address, reason }) {
 
       // Fetch closed PnL from API — authoritative source after withdrawal settles
       let pnlUsd = 0;
+      let pnlTrueUsd = 0;
       let pnlPct = 0;
       let finalValueUsd = 0;
       let initialUsd = 0;
@@ -1963,8 +2004,9 @@ export async function closePosition({ position_address, reason }) {
             const data = await res.json();
             const posEntry = (data.positions || []).find(p => p.positionAddress === position_address);
             if (posEntry) {
-              const nextPnlUsd = parseFloat(posEntry.pnlUsd || 0);
-              const nextPnlPct = parseFloat(posEntry.pnlPctChange || 0);
+              const nextPnlUsd = safeNum(posEntry.pnlUsd);
+              const nextPnlValue = config.management.solMode ? getClosedPnlValue(posEntry, true) : nextPnlUsd;
+              const nextPnlPct = getClosedPnlPct(posEntry, config.management.solMode);
               const nextFinalValueUsd = parseFloat(posEntry.allTimeWithdrawals?.total?.usd || 0);
               const nextInitialUsd = parseFloat(posEntry.allTimeDeposits?.total?.usd || 0);
               const nextFeesUsd = parseFloat(posEntry.allTimeFees?.total?.usd || 0) || feesUsd;
@@ -1972,12 +2014,13 @@ export async function closePosition({ position_address, reason }) {
               if (shouldRejectClosedPnl(nextPnlPct, reason || tracked?.close_reason)) {
                 log("close_warn", `Rejected unsettled closed PnL for ${position_address.slice(0, 8)} on attempt ${attempt + 1}/6: ${nextPnlPct.toFixed(2)}%`);
               } else {
-                pnlUsd        = nextPnlUsd;
+                pnlTrueUsd    = nextPnlUsd;
+                pnlUsd        = nextPnlValue;
                 pnlPct        = nextPnlPct;
                 finalValueUsd = nextFinalValueUsd;
                 initialUsd    = nextInitialUsd;
                 feesUsd       = nextFeesUsd;
-                log("close", `Closed PnL from API: pnl=${pnlUsd.toFixed(2)} USD (${pnlPct.toFixed(2)}%), withdrawn=${finalValueUsd.toFixed(2)}, deposited=${initialUsd.toFixed(2)}`);
+                log("close", `Closed PnL from API: pnl=${pnlUsd.toFixed(2)} ${config.management.solMode ? "SOL" : "USD"} (${pnlPct.toFixed(2)}%), withdrawn=${finalValueUsd.toFixed(2)} USD, deposited=${initialUsd.toFixed(2)} USD`);
                 break;
               }
             } else {
@@ -1993,31 +2036,39 @@ export async function closePosition({ position_address, reason }) {
       if (finalValueUsd === 0) {
         const cachedPos = _positionsCache?.positions?.find(p => p.position === position_address);
         if (cachedPos) {
-          pnlUsd        = cachedPos.pnl_true_usd ?? cachedPos.pnl_usd ?? 0;
+          pnlTrueUsd    = cachedPos.pnl_true_usd ?? (config.management.solMode ? 0 : cachedPos.pnl_usd) ?? 0;
+          pnlUsd        = config.management.solMode ? (cachedPos.pnl_usd ?? 0) : pnlTrueUsd;
           pnlPct        = cachedPos.pnl_pct   ?? 0;
           feesUsd       = (cachedPos.collected_fees_true_usd || 0) + (cachedPos.unclaimed_fees_true_usd || 0);
           initialUsd    = tracked.initial_value_usd || 0;
           if (initialUsd > 0) {
             // Keep fallback internally consistent using USD-only cached metrics.
-            finalValueUsd = Math.max(0, initialUsd + pnlUsd - feesUsd);
-            pnlPct = (pnlUsd / initialUsd) * 100;
+            finalValueUsd = Math.max(0, initialUsd + pnlTrueUsd - feesUsd);
+            if (!config.management.solMode) pnlPct = (pnlTrueUsd / initialUsd) * 100;
           } else {
             finalValueUsd = cachedPos.total_value_true_usd ?? cachedPos.total_value_usd ?? 0;
-            initialUsd = Math.max(0, finalValueUsd + feesUsd - pnlUsd);
+            initialUsd = Math.max(0, finalValueUsd + feesUsd - pnlTrueUsd);
           }
           log("close_warn", `Using cached pnl fallback because closed API has not settled yet`);
         }
       }
 
+      const closeBaseMint = pool.lbPair.tokenXMint.toString();
+      const signalSnapshot = resolvePerformanceSignalSnapshot({
+        poolAddress,
+        baseMint: closeBaseMint,
+        tracked,
+      });
+
       await recordPerformance({
         position: position_address,
         pool: poolAddress,
         pool_name: tracked.pool_name || poolMeta.name || poolAddress.slice(0, 8),
-        base_mint: pool.lbPair.tokenXMint.toString(),
+        base_mint: closeBaseMint,
         strategy: tracked.strategy,
         bin_range: tracked.bin_range,
         bin_step: tracked.bin_step || null,
-        volatility: tracked.volatility || null,
+        volatility: tracked.volatility ?? null,
         fee_tvl_ratio: tracked.fee_tvl_ratio || null,
         organic_score: tracked.organic_score || null,
         amount_sol: tracked.amount_sol,
@@ -2027,6 +2078,7 @@ export async function closePosition({ position_address, reason }) {
         minutes_in_range: minutesHeld - minutesOOR,
         minutes_held: minutesHeld,
         close_reason: reason || "agent decision",
+        signal_snapshot: signalSnapshot,
       });
 
       appendDecision({
@@ -2049,25 +2101,6 @@ export async function closePosition({ position_address, reason }) {
         },
       });
 
-      // ── Auto-swap base token → SOL (dust threshold: ≥$0.10) ────────────
-      // Runs regardless of caller (deterministic close or LLM agent).
-      // Executor post-hook checks auto_swapped flag to avoid double-swap.
-      const baseMint = pool.lbPair.tokenXMint.toString();
-      try {
-        const balances = await getWalletBalances();
-        const token = balances.tokens?.find(t => t.mint === baseMint);
-        const tokenUsd = token?.usd ?? 0;
-        const tokenBal = token?.balance ?? 0;
-        // Swap if: balance exists AND (real value ≥ $0.10 OR price data missing/zero)
-        if (tokenBal > 0 && (tokenUsd >= 0.10 || tokenUsd === 0)) {
-          log("close", `Auto-swapping ${token.symbol || baseMint.slice(0, 8)} ($${tokenUsd >= 0 ? tokenUsd.toFixed(2) : "unknown"}) back to SOL`);
-          const swapResult = await swapToken({ input_mint: baseMint, output_mint: "SOL", amount: tokenBal });
-          log("close", `Auto-swap result: ${swapResult?.amount_out ? `${swapResult.amount_out} SOL` : JSON.stringify(swapResult)}`);
-        }
-      } catch (swapErr) {
-        log("close_warn", `Auto-swap failed (non-fatal): ${swapErr.message}`);
-      }
-
       return {
         success: true,
         position: position_address,
@@ -2076,15 +2109,9 @@ export async function closePosition({ position_address, reason }) {
         claim_txs: claimTxHashes,
         close_txs: closeTxHashes,
         txs: txHashes,
-        pnl_sol: (pnlPct / 100) * (tracked.amount_sol || 0) || null,
         pnl_usd: pnlUsd,
         pnl_pct: pnlPct,
-        base_mint: baseMint,
-        auto_swapped: true,
-        reason: reason || null,
-        amount_sol: tracked.amount_sol || null,
-        strategy: tracked.strategy || null,
-        minutes_held: minutesHeld,
+        base_mint: closeBaseMint,
       };
     }
 

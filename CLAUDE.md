@@ -27,71 +27,10 @@ tools/
   executor.js       Tool dispatch: name → fn, safety checks, pre/post hooks
   dlmm.js           Meteora DLMM SDK wrapper (deploy, close, claim, positions, PnL)
   screening.js      Pool discovery from Meteora API
-  wallet.js         SOL/token balances (Helius) + Jupiter swap + sweepDustTokens
+  wallet.js         SOL/token balances (Helius) + Jupiter swap
   token.js          Token info/holders/narrative (Jupiter API)
   study.js          Top LPer study via LPAgent API
-  gmgn.js           GMGN screener: Stage1-5 pipeline + checkBounceSetup (multi-TF indicator gate)
-  chart-indicators.js  Local RSI/Bollinger/Supertrend/VWAP computation via onchainos CLI
 ```
-
----
-
-## Screening Pipeline (Three-Stage)
-
-Screening happens in three sequential stages — each config file handles one stage:
-
-```
-STAGE 1 ── gmgn-config.json ── Token-level filter
-          GMGN API → rank, volume, holders, dev metrics, indicator rules (RSI >= 60)
-          
-STAGE 2 ── user-config.json [screening section] ── DLMM pool-level filter
-          TVL, volume, bin_step range, holder concentration
-
-STAGE 3 ── executor.js safety check ── Final gate before deploy
-          volatility, bin_step range, position count, duplicate check, indicator gate
-```
-
----
-
-## Config File Locations
-
-| File | Purpose | Priority |
-|------|---------|----------|
-| `.env` | Secrets: WALLET_PRIVATE_KEY, RPC_URL, API keys | Highest |
-| `gmgn-config.json` | Non-sensitive GMGN settings, indicator rules | High |
-| `user-config.json` | Screening thresholds, management settings | Medium |
-| Legacy env vars | Backward compatibility | Lowest |
-
----
-
-## GMGN Indicator Filter (Stage 1 — gmgn-config.json)
-
-`indicatorFilter: true` → `checkBounceSetup()` runs in GMGN Stage4.
-
-**Multi-timeframe support** (added May 2026):
-
-| Config key | Default | Description |
-|-----------|---------|-------------|
-| `indicatorInterval` | `"15_MINUTE"` | Primary TF (single TF fallback) |
-| `indicatorIntervals` | `["1_MINUTE","5_MINUTE","15_MINUTE"]` | All TFs to check |
-| `indicatorMultiTfMode` | `"any"` | `"any"` (≥1 pass) / `"all"` (all pass) / `"majority"` (>50%) |
-
-**Indicator gate fail-closed:** If onchainos CLI fails to fetch candles, `checkBounceSetup` returns `{passed: false}` — deploy blocked. This prevents uninformed entries.
-
-**OHLCV source:** onchainos CLI (`/home/ubuntu/.local/bin/onchainos market kline`) — NOT GMGN API key. GMGN key = market metadata only (rank, volume, holders). All RSI/Bollinger/Supertrend computed locally.
-
-**Config keys** (in `gmgn-config.json` → loaded via `gmgnValue()`):
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `indicatorFilter` | `true` | Enable/disable Stage4 indicator filter |
-| `indicatorInterval` | `"15_MINUTE"` | Legacy single-TF interval |
-| `indicatorIntervals` | `["1_MINUTE","5_MINUTE","15_MINUTE"]` | Multi-TF list |
-| `indicatorMultiTfMode` | `"any"` | Aggregation mode |
-| `indicatorRules.minRsi` | `60` | Minimum RSI to pass |
-| `indicatorRules.requireBullishSupertrend` | `true` | Supertrend must be bullish |
-| `indicatorRules.rejectAlreadyAtBottom` | `false` | Reject if RSI < oversold AND price below lower BB |
-| `indicatorRules.requireAboveSupertrend` | `true` | Price must be above supertrend value |
 
 ---
 
@@ -120,7 +59,7 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 
 ## Config System
 
-`config.js` loads configs in priority order: `.env` > `gmgn-config.json` > `user-config.json`. Runtime mutations go through `update_config` tool (executor.js) which:
+`config.js` loads `user-config.json` at startup. Runtime mutations go through `update_config` tool (executor.js) which:
 - Updates the live `config` object immediately
 - Persists to `user-config.json`
 - Restarts cron jobs if intervals changed
@@ -145,7 +84,7 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 | deployAmountSol | management | 0.5 |
 | maxDeployAmount | risk | 50 |
 | maxPositions | risk | 3 |
-| gasReserve | management | 0.2 (set to `null` for NO reserve — deploy all minus fee) |
+| gasReserve | management | 0.2 |
 | positionSizePct | management | 0.35 |
 | minSolToOpen | management | 0.55 |
 | outOfRangeWaitMinutes | management | 30 |
@@ -159,62 +98,41 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 
 ## Position Lifecycle
 
-1. **Deploy**: `deploy_position` → executor safety checks (incl. indicator gate) → `trackPosition()` in state.js → Telegram notify
+1. **Deploy**: `deploy_position` → executor safety checks → `trackPosition()` in state.js → Telegram notify
 2. **Monitor**: management cron → `getMyPositions()` → `getPositionPnl()` → OOR detection → pool-memory snapshots
 3. **Close**: `close_position` → `recordPerformance()` in lessons.js → auto-swap base token to SOL → Telegram notify
 4. **Learn**: `evolveThresholds()` runs on performance data → updates config.screening → persists to user-config.json
 
 ---
 
-## SweepDustTokens
-
-Auto-swap dust tokens to SOL. Runs on:
-- Cron: every 5 minutes
-- Post-management: 10s after management cycle
-- Post-screening: 10s after screening cycle
-
-Filter: only swaps tokens >= `$minUsdValue` (default $0.10), excluding SOL and USDC.
-
----
-
 ## Screener Safety Checks (executor.js)
 
-Before `deploy_position` executes, `runSafetyChecks()` runs these in order:
-
-1. `bin_step` must be within `[minBinStep, maxBinStep]`
-2. Position count must be below `maxPositions` (force-fresh scan, no cache)
-3. No duplicate pool allowed (same pool_address)
-4. No duplicate base token allowed (same base_mint in another pool)
-5. **Indicator gate** — `checkBounceSetup()` via onchainos CLI (fail-closed on fetch error)
-6. If `amount_x > 0`: strip `amount_y` and `amount_sol` (tokenX-only deploy — no SOL needed)
-7. SOL balance must cover `amount_y + gasReserve` (skipped for tokenX-only)
-8. `blockedLaunchpads` enforced in `getTopCandidates()` before LLM sees candidates
-
-**Critical bug (fixed in commit 88a1313):** `poolDetail` was declared `const` inside try-block in `runSafetyChecks`, causing `ReferenceError` on every deploy attempt. Fixed by hoisting to `let poolDetail = null` before try.
+Before `deploy_position` executes:
+- `bin_step` must be within `[minBinStep, maxBinStep]`
+- Position count must be below `maxPositions` (force-fresh scan, no cache)
+- No duplicate pool allowed (same pool_address)
+- No duplicate base token allowed (same base_mint in another pool)
+- Deploy amount must include positive SOL (`amount_y` or `amount_sol`)
+- Range width must be at least the configured safe bins floor (`minBinsBelow`, never below 35)
+- Single-side SOL deploys must keep `bins_above=0`
+- SOL balance must cover `amount_y + gasReserve`
+- `blockedLaunchpads` enforced in `getTopCandidates()` before LLM sees candidates
 
 ---
 
 ## bins_below Calculation (SCREENER)
 
-Volatility-scaled formula (set in `index.js` and mirrored in `tools/executor.js`):
+Linear formula based on pool volatility (set in screener prompt, `index.js`). The lower/upper bounds are configurable, with a hard safety floor of 35 bins:
 
 ```
-bins_below = round(lo + (volatility / 5) * (hi - lo)), clamped to [lo, hi]
+bins_below = round(minBinsBelow + (volatility / 5) * (maxBinsBelow - minBinsBelow))
+clamped to [minBinsBelow, maxBinsBelow]
 ```
 
-**Bin step overrides (calibrated May 2026):**
-
-| bin_step | lo | hi | Drawdown at lo | Drawdown at hi |
-|----------|----|----|----------------|----------------|
-| 50 | 139 | 380 | -50% | -85% |
-| 80 | 151 | 289 | -70% | -90% |
-| 100 | 121 | 231 | -70% | -90% |
-| 125 | 97 | 185 | -70% | -90% |
-| other | minBinsBelow | maxBinsBelow | -70% floor | -90% ceiling |
-
-Drawdown formula: `1 - (1 + binStep/10000)^-binsBelow`
-
-**Known issue:** `computeBinsBelow` in `index.js` and `_computedBinsBelow` in `tools/executor.js` are duplicated. Edit one and manually sync the other.
+- Volatility must be finite and > 0; zero/missing volatility is treated as an unusable feed
+- Low valid volatility → minBinsBelow
+- High volatility (5+) → maxBinsBelow
+- Any value in between is valid (continuous, not tiered)
 
 ---
 
@@ -244,8 +162,8 @@ Two signals used in `getTokenHolders()`:
 - `common_funder` — multiple wallets funded by same source
 - `funded_same_window` — multiple wallets funded in same time window
 
-**Thresholds in config**: `maxBundlersPct` (default 35%), `maxTop10Pct` (default 30%)
-Jupiter audit API: `botHoldersPercentage` (5–30% is normal for legitimate tokens)
+**Thresholds in config**: `maxBundlersPct` (default 30%), `maxTop10Pct` (default 60%)
+Jupiter audit API: `botHoldersPercentage` (5–25% is normal for legitimate tokens)
 
 ---
 
@@ -283,7 +201,7 @@ const actualBaseFee = baseFactor > 0
 
 ## Hive Mind (hive-mind.js)
 
-Optional feature. Disabled by default (DEFAULT_HIVEMIND_API_KEY removed). Enable by setting `HIVE_MIND_URL` and `HIVE_MIND_API_KEY` in `.env`.
+Optional feature. Enabled by setting `HIVE_MIND_URL` and `HIVE_MIND_API_KEY` in `.env`.
 Syncs lessons/deploys to a shared server, queries consensus patterns.
 Not required for normal operation.
 
@@ -311,4 +229,3 @@ Not required for normal operation.
 
 - `lessons.js evolveThresholds()` evolves `maxVolatility` + `minFeeTvlRatio` (wrong key names — should be `minFeeActiveTvlRatio`; `maxVolatility` doesn't exist in config at all). The evolution is a no-op for those keys.
 - `get_wallet_positions` tool (dlmm.js) is in definitions.js but not in MANAGER_TOOLS or SCREENER_TOOLS — only available in GENERAL role.
-- `computeBinsBelow` in `index.js` and `_computedBinsBelow` in `tools/executor.js` are duplicated — must be manually synced when editing.

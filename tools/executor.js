@@ -1,5 +1,4 @@
 import { discoverPools, getPoolDetail, getTopCandidates } from "./screening.js";
-import { checkBounceSetup } from "./gmgn.js";
 import {
   getActiveBin,
   deployPosition,
@@ -21,8 +20,8 @@ import { addToBlacklist, removeFromBlacklist, listBlacklist } from "../token-bla
 import { blockDev, unblockDev, listBlockedDevs } from "../dev-blocklist.js";
 import { addSmartWallet, removeSmartWallet, listSmartWallets, checkSmartWalletsOnPool } from "../smart-wallets.js";
 import { getTokenInfo, getTokenHolders, getTokenNarrative } from "./token.js";
-import { config, reloadScreeningThresholds } from "../config.js";
-import { getRecentDecisions, appendDecision } from "../decision-log.js";
+import { config, reloadScreeningThresholds, MIN_SAFE_BINS_BELOW } from "../config.js";
+import { getRecentDecisions } from "../decision-log.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -31,6 +30,18 @@ import { execSync, spawn } from "child_process";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "../user-config.json");
 const GMGN_CONFIG_PATH = path.join(__dirname, "../gmgn-config.json");
+const POOL_DISCOVERY_BASE = "https://pool-discovery-api.datapi.meteora.ag";
+const MIN_VOLATILITY_TIMEFRAME = "30m";
+const TIMEFRAME_MINUTES = {
+  "5m": 5,
+  "15m": 15,
+  "30m": 30,
+  "1h": 60,
+  "2h": 120,
+  "4h": 240,
+  "12h": 720,
+  "24h": 1440,
+};
 import { log, logAction } from "../logger.js";
 import { notifyDeploy, notifyClose, notifySwap } from "../telegram.js";
 
@@ -51,23 +62,129 @@ function redactAppliedConfig(applied) {
   );
 }
 
-const MIN_VOLATILITY_TIMEFRAME = "30m";
-const TIMEFRAME_MINUTES = {
-  "5m": 5,
-  "15m": 15,
-  "30m": 30,
-  "1h": 60,
-  "2h": 120,
-  "4h": 240,
-  "12h": 720,
-  "24h": 1440,
-};
+function numberOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
 
 function getVolatilityTimeframe(sourceTimeframe) {
   const source = String(sourceTimeframe || "").trim();
   const sourceMinutes = TIMEFRAME_MINUTES[source];
   const minMinutes = TIMEFRAME_MINUTES[MIN_VOLATILITY_TIMEFRAME];
   return sourceMinutes != null && sourceMinutes >= minMinutes ? source : MIN_VOLATILITY_TIMEFRAME;
+}
+
+function poolDetailTvl(pool) {
+  return numberOrNull(pool?.tvl ?? pool?.active_tvl ?? pool?.liquidity);
+}
+
+function poolDetailBinStep(pool) {
+  return numberOrNull(pool?.dlmm_params?.bin_step ?? pool?.pool_config?.bin_step);
+}
+
+function poolDetailFeeActiveTvlRatio(pool) {
+  return numberOrNull(pool?.fee_active_tvl_ratio);
+}
+
+function poolDetailVolatility(pool) {
+  return numberOrNull(pool?.volatility);
+}
+
+async function fetchFreshPoolDetail(poolAddress, timeframe = config.screening.timeframe || "5m") {
+  const encodedTimeframe = encodeURIComponent(timeframe);
+  const filter = encodeURIComponent(`pool_address=${poolAddress}`);
+  const url = `${POOL_DISCOVERY_BASE}/pools?page_size=1&filter_by=${filter}&timeframe=${encodedTimeframe}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Pool Discovery API error: ${res.status} ${res.statusText}`);
+  const data = await res.json();
+  return (data?.data || [])[0] ?? null;
+}
+
+async function validateDeployPoolThresholds(args) {
+  let detail;
+  try {
+    detail = await fetchFreshPoolDetail(args.pool_address);
+    if (!detail) throw new Error(`Pool ${args.pool_address} not found`);
+  } catch (error) {
+    return {
+      pass: false,
+      reason: `Could not verify pool screening thresholds before deploy: ${error.message}`,
+    };
+  }
+
+  const tvl = poolDetailTvl(detail);
+  const minTvl = numberOrNull(config.screening.minTvl);
+  const maxTvl = numberOrNull(config.screening.maxTvl);
+  if (tvl == null) {
+    return {
+      pass: false,
+      reason: "Could not verify pool TVL before deploy.",
+    };
+  }
+  if (minTvl != null && minTvl > 0 && tvl < minTvl) {
+    return {
+      pass: false,
+      reason: `Pool TVL $${tvl} is below configured minTvl $${minTvl}.`,
+    };
+  }
+  if (maxTvl != null && maxTvl > 0 && tvl > maxTvl) {
+    return {
+      pass: false,
+      reason: `Pool TVL $${tvl} is above configured maxTvl $${maxTvl}.`,
+    };
+  }
+
+  const feeActiveTvlRatio = poolDetailFeeActiveTvlRatio(detail);
+  const minFeeActiveTvlRatio = numberOrNull(config.screening.minFeeActiveTvlRatio);
+  if (
+    minFeeActiveTvlRatio != null &&
+    minFeeActiveTvlRatio > 0 &&
+    (feeActiveTvlRatio == null || feeActiveTvlRatio < minFeeActiveTvlRatio)
+  ) {
+    return {
+      pass: false,
+      reason: `Pool fee/active-TVL ${feeActiveTvlRatio ?? "unknown"}% is below configured minFeeActiveTvlRatio ${minFeeActiveTvlRatio}%.`,
+    };
+  }
+
+  const volatilityTimeframe = getVolatilityTimeframe(config.screening.timeframe || "5m");
+  let volatilityDetail = detail;
+  if ((config.screening.timeframe || "5m") !== volatilityTimeframe) {
+    try {
+      volatilityDetail = await fetchFreshPoolDetail(args.pool_address, volatilityTimeframe);
+    } catch (error) {
+      return {
+        pass: false,
+        reason: `Could not verify pool ${volatilityTimeframe} volatility before deploy: ${error.message}`,
+      };
+    }
+  }
+
+  const volatility = poolDetailVolatility(volatilityDetail);
+  if (volatility == null || volatility <= 0) {
+    return {
+      pass: false,
+      reason: `Pool ${volatilityTimeframe} volatility ${volatility ?? "unknown"} is unusable. Refusing deploy.`,
+    };
+  }
+
+  const actualBinStep = poolDetailBinStep(detail);
+  const minStep = numberOrNull(config.screening.minBinStep);
+  const maxStep = numberOrNull(config.screening.maxBinStep);
+  if (actualBinStep != null && minStep != null && actualBinStep < minStep) {
+    return {
+      pass: false,
+      reason: `Pool bin_step ${actualBinStep} is below configured minBinStep ${minStep}.`,
+    };
+  }
+  if (actualBinStep != null && maxStep != null && actualBinStep > maxStep) {
+    return {
+      pass: false,
+      reason: `Pool bin_step ${actualBinStep} is above configured maxBinStep ${maxStep}.`,
+    };
+  }
+
+  return { pass: true };
 }
 
 // Registered by index.js so update_config can restart cron jobs when intervals change
@@ -245,8 +362,10 @@ const toolMap = {
       maxSteps: ["llm", "maxSteps"],
       // strategy
       strategy:     ["strategy", "strategy"],
+      binsBelow:    ["strategy", "maxBinsBelow", ["maxBinsBelow"]],
       minBinsBelow: ["strategy", "minBinsBelow"],
       maxBinsBelow: ["strategy", "maxBinsBelow"],
+      defaultBinsBelow: ["strategy", "defaultBinsBelow"],
       // hivemind
       hiveMindUrl: ["hiveMind", "url"],
       hiveMindApiKey: ["hiveMind", "apiKey"],
@@ -294,8 +413,6 @@ const toolMap = {
       gmgnMinKolCount: ["gmgn", "minKolCount"],
       gmgnMinSmartDegenCount: ["gmgn", "minSmartDegenCount"],
       gmgnMinTotalFeeSol: ["gmgn", "minTotalFeeSol"],
-      gmgnRejectSingleVolumeSpike: ["gmgn", "rejectSingleVolumeSpike"],
-      gmgnMaxSingleCandleVolumeShare: ["gmgn", "maxSingleCandleVolumeShare"],
       gmgnIndicatorFilter: ["gmgn", "indicatorFilter"],
       gmgnIndicatorInterval: ["gmgn", "indicatorInterval"],
       gmgnRequireBullishSt: ["gmgn", "indicatorRules", "requireBullishSupertrend"],
@@ -323,11 +440,21 @@ const toolMap = {
     const CONFIG_MAP_LOWER = Object.fromEntries(
       Object.entries(CONFIG_MAP).map(([k, v]) => [k.toLowerCase(), [k, v]])
     );
+    const STRATEGY_BIN_KEYS = new Set(["binsBelow", "minBinsBelow", "maxBinsBelow", "defaultBinsBelow"]);
 
     for (const [key, val] of Object.entries(changes)) {
       const match = CONFIG_MAP[key] ? [key, CONFIG_MAP[key]] : CONFIG_MAP_LOWER[key.toLowerCase()];
       if (!match) { unknown.push(key); continue; }
-      applied[match[0]] = val;
+      let normalizedVal = val;
+      if (STRATEGY_BIN_KEYS.has(match[0])) {
+        const numericVal = Number(val);
+        if (!Number.isFinite(numericVal)) {
+          unknown.push(key);
+          continue;
+        }
+        normalizedVal = Math.max(MIN_SAFE_BINS_BELOW, Math.round(numericVal));
+      }
+      applied[match[0]] = normalizedVal;
     }
 
     if (Object.keys(applied).length === 0) {
@@ -349,6 +476,22 @@ const toolMap = {
         config[section][field] = val;
         log("config", `update_config: config.${section}.${field} ${redactConfigValue(key, before)} → ${redactConfigValue(key, val)} (verify: ${redactConfigValue(key, config[section][field])})`);
       }
+    }
+    if (
+      applied.binsBelow != null ||
+      applied.minBinsBelow != null ||
+      applied.maxBinsBelow != null ||
+      applied.defaultBinsBelow != null
+    ) {
+      config.strategy.minBinsBelow = Math.max(MIN_SAFE_BINS_BELOW, Math.round(Number(config.strategy.minBinsBelow ?? MIN_SAFE_BINS_BELOW)));
+      config.strategy.maxBinsBelow = Math.max(config.strategy.minBinsBelow, Math.round(Number(config.strategy.maxBinsBelow ?? config.strategy.minBinsBelow)));
+      config.strategy.defaultBinsBelow = Math.max(
+        config.strategy.minBinsBelow,
+        Math.min(
+          config.strategy.maxBinsBelow,
+          Math.round(Number(config.strategy.defaultBinsBelow ?? config.strategy.maxBinsBelow)),
+        ),
+      );
     }
 
     // Persist GMGN tuning to gmgn-config.json, and everything else to user-config.json.
@@ -423,17 +566,6 @@ const toolMap = {
   },
 };
 
-// Maps position → close reason (set by management cycle before invoking agent)
-const _closeReasonMap = new Map();
-export function setCloseReason(position_address, reason) {
-  if (reason) _closeReasonMap.set(String(position_address), reason);
-}
-export function popCloseReason(position_address) {
-  const reason = _closeReasonMap.get(String(position_address));
-  _closeReasonMap.delete(String(position_address));
-  return reason;
-}
-
 // Tools that modify on-chain state (need extra safety checks)
 const WRITE_TOOLS = new Set([
   "deploy_position",
@@ -494,50 +626,20 @@ export async function executeTool(name, args) {
         notifySwap({ inputSymbol: args.input_mint?.slice(0, 8), outputSymbol: args.output_mint === "So11111111111111111111111111111111111111112" || args.output_mint === "SOL" ? "SOL" : args.output_mint?.slice(0, 8), amountIn: result.amount_in, amountOut: result.amount_out, tx: result.tx }).catch(() => {});
       } else if (name === "deploy_position") {
         notifyDeploy({ pair: result.pool_name || args.pool_name || args.pool_address?.slice(0, 8), amountSol: args.amount_y ?? args.amount_sol ?? 0, position: result.position, tx: result.txs?.[0] ?? result.tx, priceRange: result.price_range, rangeCoverage: result.range_coverage, binStep: result.bin_step, baseFee: result.base_fee }).catch(() => {});
-        // Lazy import to avoid circular dependency with index.js
-        let ic = null;
-        try {
-          const { getLatestIndicatorMap } = await import("../index.js");
-          const indicatorMap = getLatestIndicatorMap();
-          ic = indicatorMap[args.pool_address] || null;
-        } catch (_) {
-          // Circular import not yet ready — indicator status will be null in decision log
-        }
-        const icSummary = ic
-          ? (ic.confirmed ? `indicator=confirmed` : ic.skipped ? `indicator=skipped(${ic.reason})` : `indicator=rejected(${ic.reason})`)
-          : null;
-        appendDecision({
-          type: "deploy",
-          actor: "SCREENER",
-          pool: args.pool_address,
-          pool_name: result.pool_name || args.pool_name || args.pool_address,
-          position: result.position,
-          summary: `Deployed ${args.amount_y ?? args.amount_sol ?? 0} SOL`,
-          reason: icSummary,
-          metrics: {
-            bin_step: result.bin_step,
-            base_fee: result.base_fee,
-            range_downside_pct: result.range_coverage?.downside_pct,
-            range_upside_pct: result.range_coverage?.upside_pct,
-            strategy: args.strategy,
-          },
-        });
       } else if (name === "close_position") {
-        notifyClose({ pair: result.pool_name || args.position_address?.slice(0, 8), pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0, reason: result.reason || args.reason || popCloseReason(args.position_address) }).catch(() => {});
+        notifyClose({ pair: result.pool_name || args.position_address?.slice(0, 8), pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0 }).catch(() => {});
         // Note low-yield closes in pool memory so screener avoids redeploying
         if (args.reason && args.reason.toLowerCase().includes("yield")) {
           const poolAddr = result.pool || args.pool_address;
           if (poolAddr) addPoolNote({ pool_address: poolAddr, note: `Closed: low yield (fee/TVL below threshold) at ${new Date().toISOString().slice(0,10)}` }).catch?.(() => {});
         }
         // Auto-swap base token back to SOL unless user said to hold
-        // skip if dlmm.js already auto-swapped (avoids double-swap)
-        if (!args.skip_swap && result.base_mint && !result.auto_swapped) {
+        if (!args.skip_swap && result.base_mint) {
           try {
             const balances = await getWalletBalances({});
             const token = balances.tokens?.find(t => t.mint === result.base_mint);
-            // Swap if: balance exists AND (real value ≥ $0.10 OR price data missing/zero)
-            if (token && token.balance > 0 && (token.usd >= 0.10 || token.usd === 0)) {
-              log("executor", `Auto-swapping ${token.symbol || result.base_mint.slice(0, 8)} ($${token.usd >= 0 ? token.usd.toFixed(2) : "unknown"}) back to SOL`);
+            if (token && token.usd >= 0.10) {
+              log("executor", `Auto-swapping ${token.symbol || result.base_mint.slice(0, 8)} ($${token.usd.toFixed(2)}) back to SOL`);
               const swapResult = await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: token.balance });
               // Tell the model the swap already happened so it doesn't call swap_token again
               result.auto_swapped = true;
@@ -552,9 +654,8 @@ export async function executeTool(name, args) {
         try {
           const balances = await getWalletBalances({});
           const token = balances.tokens?.find(t => t.mint === result.base_mint);
-          // Swap if: balance exists AND (real value ≥ $0.10 OR price data missing/zero)
-          if (token && token.balance > 0 && (token.usd >= 0.10 || token.usd === 0)) {
-            log("executor", `Auto-swapping claimed ${token.symbol || result.base_mint.slice(0, 8)} ($${token.usd >= 0 ? token.usd.toFixed(2) : "unknown"}) back to SOL`);
+          if (token && token.usd >= 0.10) {
+            log("executor", `Auto-swapping claimed ${token.symbol || result.base_mint.slice(0, 8)} ($${token.usd.toFixed(2)}) back to SOL`);
             await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: token.balance });
           }
         } catch (e) {
@@ -589,6 +690,9 @@ export async function executeTool(name, args) {
 async function runSafetyChecks(name, args) {
   switch (name) {
     case "deploy_position": {
+      const poolThresholds = await validateDeployPoolThresholds(args);
+      if (!poolThresholds.pass) return poolThresholds;
+
       // Reject pools with bin_step out of configured range
       const minStep = config.screening.minBinStep;
       const maxStep = config.screening.maxBinStep;
@@ -596,6 +700,65 @@ async function runSafetyChecks(name, args) {
         return {
           pass: false,
           reason: `bin_step ${args.bin_step} is outside the allowed range of [${minStep}-${maxStep}].`,
+        };
+      }
+
+      const deployAmountY = Number(args.amount_y ?? args.amount_sol ?? 0);
+      const deployAmountX = Number(args.amount_x ?? 0);
+      if (Number.isFinite(deployAmountX) && deployAmountX > 0) {
+        return {
+          pass: false,
+          reason: "This agent only supports single-side SOL deploys. Use amount_y/amount_sol and keep amount_x=0.",
+        };
+      }
+      const requestedBinsBelow = Number(args.bins_below ?? config.strategy.defaultBinsBelow ?? config.strategy.minBinsBelow);
+      const requestedBinsAbove = Number(args.bins_above ?? 0);
+      const minBinsBelow = Math.max(MIN_SAFE_BINS_BELOW, Number(config.strategy.minBinsBelow ?? MIN_SAFE_BINS_BELOW));
+      const isSingleSidedSol = deployAmountY > 0 && deployAmountX <= 0;
+      const requestedTotalBins = requestedBinsBelow + requestedBinsAbove;
+      const requestedVolatility = args.volatility == null ? null : Number(args.volatility);
+      if (args.volatility != null && (!Number.isFinite(requestedVolatility) || requestedVolatility <= 0)) {
+        return {
+          pass: false,
+          reason: `volatility ${args.volatility} is invalid. Refusing deploy because the volatility feed is unusable.`,
+        };
+      }
+      if (
+        args.downside_pct == null &&
+        args.upside_pct == null &&
+        (
+          !Number.isFinite(requestedBinsBelow) ||
+          !Number.isFinite(requestedBinsAbove) ||
+          !Number.isInteger(requestedBinsBelow) ||
+          !Number.isInteger(requestedBinsAbove) ||
+          requestedBinsBelow < 0 ||
+          requestedBinsAbove < 0 ||
+          requestedTotalBins < minBinsBelow
+        )
+      ) {
+        return {
+          pass: false,
+          reason: `deploy range ${requestedTotalBins} total bins is below minimum ${minBinsBelow}. Refusing 1-bin/tiny-range deploy.`,
+        };
+      }
+      if (
+        isSingleSidedSol &&
+        args.downside_pct == null &&
+        (!Number.isFinite(requestedBinsBelow) || !Number.isInteger(requestedBinsBelow) || requestedBinsBelow < minBinsBelow)
+      ) {
+        return {
+          pass: false,
+          reason: `bins_below ${args.bins_below ?? "missing"} is below minimum ${minBinsBelow}. Refusing 1-bin/tiny-range deploy.`,
+        };
+      }
+      if (
+        isSingleSidedSol &&
+        args.upside_pct == null &&
+        (!Number.isFinite(requestedBinsAbove) || !Number.isInteger(requestedBinsAbove) || requestedBinsAbove !== 0)
+      ) {
+        return {
+          pass: false,
+          reason: "Single-side SOL deploy must use bins_above=0.",
         };
       }
 
@@ -631,7 +794,7 @@ async function runSafetyChecks(name, args) {
       }
 
       // Check amount limits
-      const amountY = Math.min(args.amount_y ?? args.amount_sol ?? 0, config.risk.maxDeployAmount);
+      const amountY = args.amount_y ?? args.amount_sol ?? 0;
       if (amountY <= 0) {
         return {
           pass: false,
@@ -653,106 +816,16 @@ async function runSafetyChecks(name, args) {
         };
       }
 
-      // ── HARD RULE: bins_below is computed from REAL volatility, never from LLM args ────────
-      // Fetch real volatility AND bin_step from Meteora's Pool Discovery API — do NOT trust args
-      let realVolatility = null;
-      let realBinStep = args.bin_step; // default to LLM-provided, override if Meteora has it
-      let poolDetail = null;
-      try {
-        poolDetail = await getPoolDetail({ pool_address: args.pool_address, timeframe: "5m" });
-        realVolatility = poolDetail?.volatility != null ? Number(poolDetail.volatility) : null;
-        if (poolDetail?.bin_step != null) {
-          realBinStep = Number(poolDetail.bin_step);
-          log("safety", `real_bin_step from Meteora: ${realBinStep} (LLM passed: ${args.bin_step})`);
-        }
-        log("safety", `real_volatility fetched: ${realVolatility} for pool ${args.pool_address}`);
-      } catch (err) {
-        log("safety", `failed to fetch real volatility for ${args.pool_address}: ${err.message}`);
-      }
-      // Fall back to LLM-provided volatility only if Meteora fetch fails (and log warning)
-      const volForCalc = realVolatility ?? (args.volatility ?? 0);
-      if (realVolatility === null) {
-        log("safety_warn", `using LLM-provided volatility ${volForCalc} — Meteora fetch failed`);
-      }
-
-      // Also block downside_pct / upside_pct — these override bins_below in dlmm.js and bypass
-      // the minBinsBelow safety floor. Block entirely unless downside_pct >= 60.
-      if (args.downside_pct != null || args.upside_pct != null) {
-        const dp = Number(args.downside_pct ?? 0);
-        if (dp < 60) {
-          log("safety_block", `downside_pct/upside_pct blocked: ${dp}% < 60% minimum coverage. Use bins_below only.`);
-          return {
-            pass: false,
-            reason: `downside_pct ${dp}% is below the 60% minimum safety floor — this bypasses bins_below computation. Use bins_below only.`,
-          };
-        }
-        log("safety_block", `downside_pct/upside_pct overridden — ${dp}% >= 60% minimum, proceeding.`);
-      }
-
-      // copy of computeBinsBelow from index.js — keep in sync
-      // Drawdown formula: 1 - (1 + binStep/10000)^-binsBelow = downside coverage %
-      // bin_step 50:  lo=139 → -50%   (vol=0 flat)   /  hi=380 → -85%   (vol=5 max)
-      // bin_step 80:  lo=151 → -70%   (vol=0 flat)   /  hi=289 → -90%   (vol=5 max)
-      // bin_step 100: lo=121 → -70%   (vol=0 flat)   /  hi=231 → -90%   (vol=5 max)
-      // bin_step 125: lo=97  → -70%   (vol=0 flat)   /  hi=185 → -90%   (vol=5 max)
-      // fallback (other): minBinsBelow → -70% floor / maxBinsBelow → -90% ceiling
-      function _computedBinsBelow(volatility, binStep) {
-        let lo = config.strategy.minBinsBelow; // fallback — MUST be let, not const
-        let hi = config.strategy.maxBinsBelow;   // fallback
-        if (binStep === 50)      { lo = 139; hi = 380; }
-        else if (binStep === 80)       { lo = 151; hi = 289; }
-        else if (binStep === 100) { lo = 121; hi = 231; }
-        else if (binStep === 125) { lo = 97;  hi = 185; }
-        return Math.max(lo, Math.min(hi, Math.round(lo + ((Number(volatility) || 0) / 5) * (hi - lo))));
-      }
-      const computedBins = _computedBinsBelow(volForCalc, realBinStep);
-      log("safety", `bins_below check: LLM passed=${args.bins_below}, computed from real_vol=${volForCalc}, real_bin_step=${realBinStep} → ${computedBins}`);
-      if (args.bins_below !== computedBins) {
-        log("safety", `bins_below override blocked: LLM passed ${args.bins_below}, forced to ${computedBins}`);
-        args.bins_below = computedBins;
-      }
-
-      // Check SOL balance — auto-reduce amountY if needed, don't block
+      // Check SOL balance
       if (process.env.DRY_RUN !== "true") {
         const balance = await getWalletBalances();
-        const gasReserve = config.management.gasReserve ?? 0.01;
-        const maxDeployable = balance.sol - gasReserve;
-        if (maxDeployable <= 0) {
+        const gasReserve = config.management.gasReserve;
+        const minRequired = amountY + gasReserve;
+        if (balance.sol < minRequired) {
           return {
             pass: false,
-            reason: `Insufficient SOL: have ${balance.sol} SOL, need at least ${gasReserve} SOL for gas.`,
+            reason: `Insufficient SOL: have ${balance.sol} SOL, need ${minRequired} SOL (${amountY} deploy + ${gasReserve} gas reserve).`,
           };
-        }
-        // Auto-reduce amountY to fit balance, log and continue
-        if (amountY > maxDeployable) {
-          log("safety", `amountY reduced: ${amountY} → ${maxDeployable} SOL (balance ${balance.sol} - gasReserve ${gasReserve})`);
-          args.amount_y = maxDeployable;
-          args.amount_sol = maxDeployable;
-          amountY = maxDeployable;
-        }
-      }
-
-      // Indicator gate — runs even when LLM bypasses screener pipeline (hivemind, manual, Telegram)
-      if (config.gmgn?.indicatorFilter !== false) {
-        const baseMint = poolDetail?.token_x?.address;
-        if (baseMint) {
-          try {
-            const indCheck = await checkBounceSetup(baseMint);
-            if (!indCheck.passed) {
-              log("safety_block", `Indicator gate blocked deploy for ${baseMint}: ${indCheck.reasons.join(", ")}`);
-              return {
-                pass: false,
-                reason: `Indicator gate blocked: ${indCheck.reasons.join(", ")}`,
-              };
-            }
-            log("safety", `Indicator gate passed: RSI=${indCheck.signal.rsi}, ST=${indCheck.signal.supertrendDirection}`);
-          } catch (err) {
-            log("safety_block", `Indicator gate fetch failed for ${baseMint}: ${err.message} — deploy blocked`);
-            return {
-              pass: false,
-              reason: `Indicator gate unavailable (${err.message}) — deploy blocked to prevent uninformed entry`,
-            };
-          }
         }
       }
 
